@@ -2,8 +2,8 @@ import "@/styles/globals.css";
 import { Providers } from "./providers";
 import { Metadata, Viewport } from "next";
 
-const title = "Internal Tools";
-const description = "Internal business tools dashboard";
+const title = "Ciariguitars";
+const description = "Integration Dashboard - Inventory, Production & Sales Operations";
 
 export const viewport: Viewport = {
   width: "device-width",
