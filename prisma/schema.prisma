@@ -329,3 +329,343 @@ model FormSubmission {
   @@index([email])
   @@index([createdAt])
 }
+
+// ============================================
+// INTEGRATION SETTINGS
+// ============================================
+
+model IntegrationConnection {
+  id String @id @default(cuid())
+
+  platform    IntegrationPlatform
+  name        String
+  apiKey      String?
+  apiSecret   String?
+  accessToken String?
+  refreshToken String?
+  shopUrl     String?
+  isActive    Boolean @default(true)
+  lastSyncAt  DateTime?
+  config      Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([platform])
+}
+
+enum IntegrationPlatform {
+  KATANA
+  REVERB
+  SHOPIFY
+  SHIPSTATION
+  MANAGEMARKETS
+  SHOPFLOW
+}
+
+// ============================================
+// INVENTORY & SKU MAPPING
+// ============================================
+
+model InventoryItem {
+  id String @id @default(cuid())
+
+  sku           String   @unique
+  name          String
+  description   String?
+  category      ItemCategory @default(FINISHED_GOOD)
+  
+  katanaQty     Int      @default(0)
+  reverbQty     Int      @default(0)
+  shopifyQty    Int      @default(0)
+  shopflowQty   Int      @default(0)
+  
+  averageCost   Float?
+  landedCost    Float?
+  retailPrice   Float?
+  
+  leadTimeDays  Int?
+  isReadyToShip Boolean  @default(false)
+  
+  lastKatanaSyncAt  DateTime?
+  lastReverbSyncAt  DateTime?
+  lastShopifySyncAt DateTime?
+
+  skuMappings   SKUMapping[]
+  syncLogs      SyncLog[]
+  consumptions  ProductionConsumption[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@index([isReadyToShip])
+}
+
+enum ItemCategory {
+  FINISHED_GOOD
+  RAW_MATERIAL
+  COMPONENT
+  WORK_IN_PROGRESS
+}
+
+model SKUMapping {
+  id String @id @default(cuid())
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  platform      IntegrationPlatform
+  externalSku   String
+  externalId    String?
+  externalName  String?
+  isActive      Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([platform, externalSku])
+  @@index([inventoryItemId])
+  @@index([platform])
+}
+
+// ============================================
+// SYNC LOGS & ALERTS
+// ============================================
+
+model SyncLog {
+  id String @id @default(cuid())
+
+  syncType      SyncType
+  platform      IntegrationPlatform
+  status        SyncStatus
+  direction     SyncDirection
+  
+  inventoryItemId String?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
+  
+  previousValue Json?
+  newValue      Json?
+  errorMessage  String?
+  details       String? @db.Text
+
+  resolvedAt    DateTime?
+  resolvedBy    String?
+
+  createdAt DateTime @default(now())
+
+  @@index([syncType])
+  @@index([platform])
+  @@index([status])
+  @@index([createdAt])
+  @@index([inventoryItemId])
+}
+
+enum SyncType {
+  INVENTORY_QUANTITY
+  INVENTORY_COST
+  PRODUCTION_CONSUMPTION
+  ORDER_SYNC
+  SKU_MAPPING
+  LISTING_UPDATE
+}
+
+enum SyncStatus {
+  SUCCESS
+  FAILED
+  PENDING
+  PARTIAL
+  SKIPPED
+}
+
+enum SyncDirection {
+  INBOUND
+  OUTBOUND
+  BIDIRECTIONAL
+}
+
+model Alert {
+  id String @id @default(cuid())
+
+  type        AlertType
+  severity    AlertSeverity
+  title       String
+  message     String @db.Text
+  
+  relatedSku  String?
+  relatedPlatform IntegrationPlatform?
+  
+  isRead      Boolean @default(false)
+  isDismissed Boolean @default(false)
+  
+  actionUrl   String?
+  actionLabel String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type])
+  @@index([severity])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+enum AlertType {
+  SYNC_FAILURE
+  LOW_STOCK
+  QUANTITY_MISMATCH
+  CONNECTION_ERROR
+  MANUAL_OVERRIDE
+  COST_DISCREPANCY
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+// ============================================
+// PRODUCTION & CONSUMPTION
+// ============================================
+
+model ProductionOrder {
+  id String @id @default(cuid())
+
+  orderNumber   String   @unique
+  productName   String
+  productSku    String
+  quantity      Int
+  status        ProductionStatus @default(PLANNED)
+  
+  startedAt     DateTime?
+  completedAt   DateTime?
+  
+  katanaWorkOrderId String?
+  shopflowOrderId   String?
+
+  consumptions  ProductionConsumption[]
+  timers        ProductionTimer[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([productSku])
+}
+
+enum ProductionStatus {
+  PLANNED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+model ProductionConsumption {
+  id String @id @default(cuid())
+
+  productionOrderId String
+  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  quantityConsumed Int
+  unitCost         Float?
+  
+  consumedAt       DateTime @default(now())
+  syncedToKatana   Boolean @default(false)
+  katanaSyncAt     DateTime?
+
+  @@index([productionOrderId])
+  @@index([inventoryItemId])
+  @@index([consumedAt])
+}
+
+model ProductionTimer {
+  id String @id @default(cuid())
+
+  productionOrderId String
+  productionOrder   ProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+
+  stepName      String
+  operatorName  String?
+  
+  startedAt     DateTime
+  stoppedAt     DateTime?
+  durationSecs  Int?
+  
+  laborCost     Float?
+  notes         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productionOrderId])
+  @@index([startedAt])
+}
+
+// ============================================
+// SHIPPING OPTIONS
+// ============================================
+
+model ShippingCarrier {
+  id String @id @default(cuid())
+
+  name        String
+  code        String @unique
+  platform    IntegrationPlatform
+  isActive    Boolean @default(true)
+  
+  isDomestic     Boolean @default(true)
+  isInternational Boolean @default(false)
+  
+  services    ShippingService[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ShippingService {
+  id String @id @default(cuid())
+
+  carrierId   String
+  carrier     ShippingCarrier @relation(fields: [carrierId], references: [id], onDelete: Cascade)
+
+  name        String
+  code        String
+  isActive    Boolean @default(true)
+  
+  estimatedDaysMin Int?
+  estimatedDaysMax Int?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([carrierId, code])
+  @@index([carrierId])
+}
+
+// ============================================
+// SYNC CONFIGURATION
+// ============================================
+
+model SyncConfiguration {
+  id String @id @default(cuid())
+
+  syncType      SyncType
+  isEnabled     Boolean @default(true)
+  
+  frequencyMins Int @default(15)
+  lastRunAt     DateTime?
+  nextRunAt     DateTime?
+  
+  config        Json?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([syncType])
+}

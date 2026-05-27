@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/authOptions";
 import prisma from "@/lib/prisma";
+import { DashboardClient } from "./client";
+import { fetchDashboardData } from "@/lib/fetchers";
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
@@ -18,5 +20,7 @@ export default async function DashboardPage() {
     redirect("/");
   }
 
-  redirect("/dashboard/tasks");
+  const { data, error } = await fetchDashboardData();
+
+  return <DashboardClient initialData={data} error={error} />;
 }

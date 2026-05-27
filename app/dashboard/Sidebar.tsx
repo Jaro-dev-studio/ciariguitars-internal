@@ -7,15 +7,20 @@ import {
   LogOut,
   Users,
   X,
-  Settings,
-  ListTodo,
   UserCircle,
   Bell,
-  Repeat,
-  LayoutDashboard,
-  Calculator,
-  FolderKanban,
   Shield,
+  LayoutDashboard,
+  Package,
+  RefreshCw,
+  Factory,
+  Link2,
+  DollarSign,
+  Settings,
+  FileText,
+  ShoppingCart,
+  Truck,
+  Music,
 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
@@ -49,17 +54,38 @@ interface NavSection {
 
 const allNavigationSections: NavSection[] = [
   {
-    title: "Work",
+    title: "Overview",
     items: [
-      { href: "/dashboard/projects", label: "Projects", icon: FolderKanban, pageKey: "projects" },
-      { href: "/dashboard/tasks", label: "Tasks", icon: ListTodo, pageKey: "tasks" },
-      { href: "/dashboard/recurring-tasks", label: "Recurring Tasks", icon: Repeat, pageKey: "recurringTasks" },
+      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, pageKey: "dashboard" },
     ],
   },
   {
-    title: "Tools",
+    title: "Inventory",
     items: [
-      { href: "/dashboard/calculation", label: "Calculations", icon: Calculator, pageKey: "calculations" },
+      { href: "/dashboard/inventory-sync", label: "Inventory Sync", icon: RefreshCw, pageKey: "inventorySync" },
+      { href: "/dashboard/reverb-sync", label: "Reverb Sync", icon: Package, pageKey: "reverbSync" },
+      { href: "/dashboard/sku-mapping", label: "SKU Mapping", icon: Link2, pageKey: "skuMapping" },
+      { href: "/dashboard/cost-sync", label: "Cost Sync", icon: DollarSign, pageKey: "costSync" },
+    ],
+  },
+  {
+    title: "Production",
+    items: [
+      { href: "/dashboard/production", label: "Production", icon: Factory, pageKey: "production" },
+    ],
+  },
+  {
+    title: "Sales & Shipping",
+    items: [
+      { href: "/dashboard/sales-inventory", label: "Sales Inventory", icon: ShoppingCart, pageKey: "salesInventory" },
+      { href: "/dashboard/shipping", label: "Shipping", icon: Truck, pageKey: "shipping" },
+    ],
+  },
+  {
+    title: "System",
+    items: [
+      { href: "/dashboard/integrations", label: "Integrations", icon: Settings, pageKey: "integrations" },
+      { href: "/dashboard/sync-logs", label: "Sync Logs", icon: FileText, pageKey: "syncLogs" },
     ],
   },
   {
@@ -143,10 +169,10 @@ function SidebarContent({
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-3 border-b border-border p-4">
         <div className="bg-primary flex size-8 items-center justify-center rounded-lg">
-          <FolderKanban className="text-primary-foreground size-4" />
+          <Music className="text-primary-foreground size-4" />
         </div>
         <div className="flex flex-col">
-          <span className="text-sm font-semibold">Internal Tools</span>
+          <span className="text-sm font-semibold">Ciariguitars</span>
           <span className="text-xs text-muted-foreground">{user.role}</span>
         </div>
       </div>
@@ -164,7 +190,11 @@ function SidebarContent({
                   href={item.href}
                   label={item.label}
                   icon={item.icon}
-                  isActive={pathname === item.href || pathname.startsWith(item.href + "/")}
+                  isActive={
+                    item.href === "/dashboard"
+                      ? pathname === "/dashboard"
+                      : pathname === item.href || pathname.startsWith(item.href + "/")
+                  }
                   onClick={onNavigate}
                 />
               ))}
