@@ -1,0 +1,61 @@
+# Internal Business Tools Template - Next.js Application
+
+This is a template repository for building internal business tools.
+
+- Code Style
+  - Write concise, technical TypeScript code
+  - Use functional and declarative programming patterns; avoid classes
+  - Prefer iteration and modularization over code duplication
+  - Use descriptive variable names with auxiliary verbs (e.g., isLoading, hasError)
+  - Keep code organized and consistent across the codebase
+  - Keep components focused and composable
+  - Use the cn() utility for conditional classNames
+  - Every page.tsx page should be a server component, and do data fetching if needed
+  - Always return data from fetchers and actions in following format: `{ data: (type of data) | null, error: string | null }`
+  - Always wrap fetchers and actions within try-catch block
+
+- Folder Structure
+  - All server actions are defined in /lib/actions.ts
+  - All fetchers are defined in /lib/fetchers.ts
+  - All forms should be defined within /components/forms folder
+  - All modals should be defined within /components/modals folder
+  - Layout components should be defined within /components/layout folder
+  - All configuration files must be defined within /config folder
+  - All custom hooks must be defined within /hooks folder
+  - Always add css/scss files to /styles folder
+  - Always use server actions, avoid API routes unless necessary (e.g. for webhooks)
+
+- Naming Conventions
+  - All components should go in /components and be named like new-component.tsx
+  - Use lowercase with dashes for directories (e.g., components/auth-wizard)
+  - Don't define custom components within /ui folder
+  - Favor named exports for components
+
+- TypeScript Usage
+  - Use TypeScript for all code
+  - Prefer interfaces over types
+
+- UI and Styling
+  - Always use CSS variable-based colors (primary, secondary, accent, background, etc.)
+  - Never hardcode hex colors - use Tailwind classes that map to CSS variables
+  - Use mobile-first approach for responsive design
+  - Make sure everything you produce is mobile-friendly
+  - Don't change element sizes on hover
+  - Don't use gradients
+  - Keep UI consistent across pages
+  - Use modern UI/UX design patterns
+
+- Key Conventions
+  - Favor server components and Next.js SSR
+  - Structure pages as: page.tsx for data fetching, client.tsx for the client component, loading.tsx for loading state
+  - Avoid using space-x and space-y, instead use flex and gap
+  - Use pnpm
+  - Use pnpm lint for linting fixes
+  - Always use prisma db push, never use prisma db migrate
+  - Never run prisma db push with the accept data loss flag
+  - Always build at the end of the task and fix build errors
+
+- Roles
+  - ADMIN: Full access to all dashboard pages
+  - MEMBER: Access to tasks, action items, recurring tasks, profile
+  - VIEWER: Read-only access to tasks, action items, profile

@@ -1,0 +1,331 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ============================================
+// USER & AUTH
+// ============================================
+
+model User {
+  id String @id @default(cuid())
+
+  email     String   @unique
+  password  String
+  firstName String?
+  lastName  String?
+  role      UserRole @default(VIEWER)
+
+  roleId String?
+  customRole Role? @relation(fields: [roleId], references: [id])
+
+  permissionOverride UserPermissionOverride?
+
+  projects               ProjectMember[]
+  calculations           Calculation[]
+  assignedTasks          Task[]           @relation("TaskAssignee")
+  createdTasks           Task[]           @relation("TaskCreatedBy")
+  taskViews              TaskView[]       @relation("TaskViews")
+  aiChats                AIChat[]
+  assignedRecurringTasks RecurringTask[]  @relation("RecurringTaskAssignee")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([roleId])
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+model Role {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  description String?
+  isSystem    Boolean @default(false)
+  permissions Json
+
+  users User[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model UserPermissionOverride {
+  id          String @id @default(cuid())
+  userId      String @unique
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permissions Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================
+// PROJECTS
+// ============================================
+
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  status      ProjectStatus @default(ACTIVE)
+
+  members                  ProjectMember[]
+  tasks                    Task[]
+  recurringTasks           RecurringTask[]
+  slackNotificationConfigs SlackNotificationConfig[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+  COMPLETED
+}
+
+model ProjectMember {
+  id String @id @default(cuid())
+
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, projectId])
+  @@index([userId])
+  @@index([projectId])
+}
+
+// ============================================
+// TASKS
+// ============================================
+
+model Task {
+  id          String       @id @default(cuid())
+  name        String
+  description String?
+  priority    TaskPriority @default(MEDIUM)
+  status      TaskStatus   @default(TODO)
+  dueDate     DateTime?
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id])
+
+  assigneeId String?
+  assignee   User?   @relation("TaskAssignee", fields: [assigneeId], references: [id])
+
+  attachments Attachment[]
+
+  blockedByTasks Task[] @relation("TaskBlockedByTask")
+  blockingTasks  Task[] @relation("TaskBlockedByTask")
+
+  createdById String?
+  createdBy   User?   @relation("TaskCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([createdById])
+}
+
+model Attachment {
+  id   String @id @default(cuid())
+  name String
+  url  String
+  type String
+  size Int
+
+  taskId String
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([taskId])
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  PENDING_ADMIN_REVIEW
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+}
+
+// ============================================
+// VIEWS (saved filters for tasks)
+// ============================================
+
+model TaskView {
+  id   String @id @default(cuid())
+  name String
+
+  viewMode      String  @default("table")
+  sortColumn    String?
+  sortDirection String  @default("asc")
+
+  statusFilters    String[]
+  priorityFilters  String[]
+  projectFilters   String[]
+  assigneeFilters  String[]
+  createdByFilters String[]
+
+  userId String
+  user   User   @relation("TaskViews", fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+
+// ============================================
+// RECURRING TASKS
+// ============================================
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+model RecurringTask {
+  id          String       @id @default(cuid())
+  name        String
+  description String?      @db.Text
+  priority    TaskPriority @default(MEDIUM)
+
+  frequency  RecurrenceFrequency
+  dayOfWeek  Int?
+  dayOfMonth Int?
+  isActive   Boolean             @default(true)
+
+  lastCreatedAt DateTime?
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id])
+
+  assigneeId String?
+  assignee   User?   @relation("RecurringTaskAssignee", fields: [assigneeId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([isActive])
+}
+
+// ============================================
+// SLACK NOTIFICATIONS
+// ============================================
+
+model SlackNotificationConfig {
+  id String @id @default(cuid())
+
+  eventType      SlackNotificationEventType
+  sendToPublic   Boolean @default(false)
+  sendToInternal Boolean @default(false)
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, eventType])
+  @@index([projectId])
+}
+
+enum SlackNotificationEventType {
+  TASK_COMPLETED
+  TASK_UNBLOCKED
+}
+
+// ============================================
+// CALCULATIONS
+// ============================================
+
+model Calculation {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  flowData    Json?
+  createdBy   User     @relation(fields: [userId], references: [id])
+  userId      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ============================================
+// AI CHAT
+// ============================================
+
+model AIChat {
+  id    String @id @default(cuid())
+  title String @default("New Chat")
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  messages AIChatMessage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([updatedAt])
+}
+
+model AIChatMessage {
+  id      String @id @default(cuid())
+  role    String
+  content String @db.Text
+
+  toolCalls Json?
+
+  chatId String
+  chat   AIChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([chatId])
+}
+
+// ============================================
+// FORM SUBMISSIONS (generic)
+// ============================================
+
+model FormSubmission {
+  id String @id @default(cuid())
+
+  name    String
+  email   String
+  message String?  @db.Text
+  fields  Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([email])
+  @@index([createdAt])
+}
