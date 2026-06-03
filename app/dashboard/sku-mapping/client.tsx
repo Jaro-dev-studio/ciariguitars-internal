@@ -1,19 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   Link2,
   Plus,
   Search,
-  Upload,
   Download,
   Edit2,
   Trash2,
   CheckCircle2,
   XCircle,
   AlertTriangle,
-  ArrowRight,
+  RefreshCw,
+  Sparkles,
+  Info,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -29,275 +31,296 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-
-interface SKUMapping {
-  id: string;
-  inventoryItemId: string;
-  platform: string;
-  externalSku: string;
-  externalId: string | null;
-  externalName: string | null;
-  isActive: boolean;
-  inventoryItem: {
-    id: string;
-    sku: string;
-    name: string;
-    category: string;
-  };
-}
-
-interface InventoryItem {
-  id: string;
-  sku: string;
-  name: string;
-  category: string;
-}
+import { PageIntro } from "@/components/page-intro";
+import {
+  importCatalogs,
+  createMapping,
+  updateMapping,
+  deleteMapping,
+  autoSuggestMatches,
+  type MappingRow,
+  type UnmappedKatana,
+  type UnmappedReverb,
+  type SuggestedMatch,
+} from "@/lib/sku-mapping-actions";
 
 interface SKUMappingClientProps {
-  skuMappings: any[] | null;
-  inventoryItems: any[] | null;
+  mappings: MappingRow[];
+  unmappedKatana: UnmappedKatana[];
+  unmappedReverb: UnmappedReverb[];
+  katanaImported: number;
+  reverbImported: number;
   error: string | null;
 }
 
-interface MockMapping {
-  id: string;
-  katanaSku: string;
-  katanaName: string;
-  category: string;
-  mappings: {
-    platform: string;
-    externalSku: string;
-    externalName: string;
-    isActive: boolean;
-  }[];
-}
-
-const mockMappings: MockMapping[] = [
-  {
-    id: "1",
-    katanaSku: "CG-TELE-001",
-    katanaName: "Classic Telecaster - Butterscotch Blonde",
-    category: "FINISHED_GOOD",
-    mappings: [
-      { platform: "REVERB", externalSku: "RV-CG-TELE-001", externalName: "Ciari Classic Telecaster Butterscotch", isActive: true },
-      { platform: "SHOPIFY", externalSku: "SH-TELE-BB", externalName: "Classic Telecaster - Butterscotch", isActive: true },
-      { platform: "SHOPFLOW", externalSku: "CG-TELE-001", externalName: "Classic Telecaster", isActive: true },
-    ],
-  },
-  {
-    id: "2",
-    katanaSku: "CG-STRAT-002",
-    katanaName: "Modern Stratocaster - Sunburst",
-    category: "FINISHED_GOOD",
-    mappings: [
-      { platform: "REVERB", externalSku: "RV-CG-STRAT-002", externalName: "Ciari Modern Strat 3-Color Sunburst", isActive: true },
-      { platform: "SHOPIFY", externalSku: "SH-STRAT-SB", externalName: "Modern Stratocaster - Sunburst", isActive: true },
-      { platform: "SHOPFLOW", externalSku: "CG-STRAT-002", externalName: "Modern Stratocaster", isActive: true },
-    ],
-  },
-  {
-    id: "3",
-    katanaSku: "CG-LP-003",
-    katanaName: "Les Paul Custom - Ebony",
-    category: "FINISHED_GOOD",
-    mappings: [
-      { platform: "REVERB", externalSku: "RV-CG-LP-003", externalName: "Ciari LP Custom Black Beauty", isActive: true },
-      { platform: "SHOPIFY", externalSku: "SH-LP-EB", externalName: "Les Paul Custom - Ebony", isActive: true },
-      { platform: "SHOPFLOW", externalSku: "CG-LP-003", externalName: "Les Paul Custom", isActive: false },
-    ],
-  },
-  {
-    id: "4",
-    katanaSku: "RAW-NCL-001",
-    katanaName: "Nitrocellulose Lacquer - Clear",
-    category: "RAW_MATERIAL",
-    mappings: [
-      { platform: "SHOPFLOW", externalSku: "RAW-NCL-001", externalName: "Nitro Lacquer Clear", isActive: true },
-    ],
-  },
-  {
-    id: "5",
-    katanaSku: "CG-335-004",
-    katanaName: "Semi-Hollow 335 Style - Cherry",
-    category: "FINISHED_GOOD",
-    mappings: [
-      { platform: "REVERB", externalSku: "RV-CG-335-004", externalName: "Ciari 335 Cherry Red", isActive: true },
-      { platform: "SHOPIFY", externalSku: "", externalName: "", isActive: false },
-    ],
-  },
-  {
-    id: "6",
-    katanaSku: "CG-JAZZ-005",
-    katanaName: "Jazz Bass - Olympic White",
-    category: "FINISHED_GOOD",
-    mappings: [
-      { platform: "REVERB", externalSku: "RV-CG-JB-005", externalName: "Ciari Jazz Bass Olympic White", isActive: true },
-      { platform: "SHOPIFY", externalSku: "SH-JB-OW", externalName: "Jazz Bass - Olympic White", isActive: true },
-      { platform: "SHOPFLOW", externalSku: "CG-JAZZ-005", externalName: "Jazz Bass", isActive: true },
-    ],
-  },
-];
-
-const platforms = ["REVERB", "SHOPIFY", "SHOPFLOW"];
-
-function AddMappingDialog({ onAdd }: { onAdd: (mapping: any) => void }) {
-  const [open, setOpen] = useState(false);
-  const [katanaSku, setKatanaSku] = useState("");
-  const [platform, setPlatform] = useState("");
-  const [externalSku, setExternalSku] = useState("");
-  const [externalName, setExternalName] = useState("");
-
-  const handleSubmit = () => {
-    if (!katanaSku || !platform || !externalSku) {
-      toast.error("Please fill in all required fields");
-      return;
-    }
-
-    onAdd({
-      katanaSku,
-      platform,
-      externalSku,
-      externalName,
-    });
-
-    toast.success("Mapping created", {
-      description: `${katanaSku} mapped to ${platform}:${externalSku}`,
-    });
-
-    setOpen(false);
-    setKatanaSku("");
-    setPlatform("");
-    setExternalSku("");
-    setExternalName("");
-  };
-
+function StatCard({
+  icon: Icon,
+  value,
+  label,
+  tone,
+}: {
+  icon: typeof Link2;
+  value: number;
+  label: string;
+  tone: string;
+}) {
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button>
-          <Plus className="mr-2 size-4" />
-          Add Mapping
-        </Button>
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create SKU Mapping</DialogTitle>
-          <DialogDescription>
-            Map a Katana SKU to an external platform SKU
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <Label htmlFor="katanaSku">Katana SKU</Label>
-            <Input
-              id="katanaSku"
-              placeholder="e.g., CG-TELE-001"
-              value={katanaSku}
-              onChange={(e) => setKatanaSku(e.target.value)}
-            />
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center gap-3">
+          <div className={cn("rounded-lg p-2.5", tone)}>
+            <Icon className="size-5" />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="platform">Platform</Label>
-            <Select value={platform} onValueChange={setPlatform}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select platform" />
-              </SelectTrigger>
-              <SelectContent>
-                {platforms.map((p) => (
-                  <SelectItem key={p} value={p}>{p}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="externalSku">External SKU</Label>
-            <Input
-              id="externalSku"
-              placeholder="e.g., RV-CG-TELE-001"
-              value={externalSku}
-              onChange={(e) => setExternalSku(e.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="externalName">External Name (optional)</Label>
-            <Input
-              id="externalName"
-              placeholder="Product name on platform"
-              value={externalName}
-              onChange={(e) => setExternalName(e.target.value)}
-            />
+          <div>
+            <p className="text-2xl font-bold">{value}</p>
+            <p className="text-xs text-muted-foreground">{label}</p>
           </div>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={handleSubmit}>Create Mapping</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </CardContent>
+    </Card>
   );
 }
 
-export function SKUMappingClient({ skuMappings, inventoryItems, error }: SKUMappingClientProps) {
+/** Searchable picker over a list, used for Katana variants and Reverb listings. */
+function SearchablePicker<T>({
+  items,
+  getKey,
+  getPrimary,
+  getSecondary,
+  value,
+  onChange,
+  placeholder,
+}: {
+  items: T[];
+  getKey: (item: T) => string;
+  getPrimary: (item: T) => string;
+  getSecondary: (item: T) => string;
+  value: string | null;
+  onChange: (key: string) => void;
+  placeholder: string;
+}) {
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase();
+    return items
+      .filter(
+        (i) =>
+          getPrimary(i).toLowerCase().includes(q) ||
+          getSecondary(i).toLowerCase().includes(q) ||
+          getKey(i).toLowerCase().includes(q)
+      )
+      .slice(0, 50);
+  }, [items, query, getPrimary, getSecondary, getKey]);
+
+  return (
+    <div className="space-y-2">
+      <div className="relative">
+        <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+        <Input
+          placeholder={placeholder}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          className="pl-8"
+        />
+      </div>
+      <div className="max-h-56 overflow-y-auto rounded-md border">
+        {filtered.length === 0 ? (
+          <p className="p-3 text-sm text-muted-foreground">No matches</p>
+        ) : (
+          filtered.map((item) => {
+            const key = getKey(item);
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => onChange(key)}
+                className={cn(
+                  "flex w-full flex-col items-start gap-0.5 border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-muted/50",
+                  value === key && "bg-accent/10"
+                )}
+              >
+                <span className="font-medium">{getPrimary(item)}</span>
+                <span className="font-mono text-xs text-muted-foreground">
+                  {getSecondary(item)}
+                </span>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function SKUMappingClient({
+  mappings,
+  unmappedKatana,
+  unmappedReverb,
+  katanaImported,
+  reverbImported,
+  error,
+}: SKUMappingClientProps) {
+  const router = useRouter();
   const [searchTerm, setSearchTerm] = useState("");
-  const [platformFilter, setPlatformFilter] = useState<string>("all");
-  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [isImporting, startImport] = useTransition();
+  const [isSuggesting, startSuggest] = useTransition();
+  const [isSaving, startSave] = useTransition();
 
-  const mappings = mockMappings;
+  const [addOpen, setAddOpen] = useState(false);
+  const [addKatana, setAddKatana] = useState<string | null>(null);
+  const [addReverb, setAddReverb] = useState<string | null>(null);
 
-  const filteredMappings = mappings.filter(mapping => {
-    const matchesSearch = 
-      mapping.katanaSku.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      mapping.katanaName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      mapping.mappings.some(m => 
-        m.externalSku.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        m.externalName.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    
-    const matchesCategory = categoryFilter === "all" || mapping.category === categoryFilter;
-    
-    const matchesPlatform = platformFilter === "all" || 
-      mapping.mappings.some(m => m.platform === platformFilter && m.isActive);
+  const [editRow, setEditRow] = useState<MappingRow | null>(null);
+  const [editReverb, setEditReverb] = useState<string | null>(null);
 
-    return matchesSearch && matchesCategory && matchesPlatform;
-  });
+  const [suggestions, setSuggestions] = useState<SuggestedMatch[] | null>(null);
 
-  const totalMappings = mappings.reduce((sum, m) => sum + m.mappings.filter(x => x.isActive).length, 0);
-  const unmappedCount = mappings.filter(m => 
-    m.category === "FINISHED_GOOD" && m.mappings.filter(x => x.isActive).length < 2
-  ).length;
-
-  const handleAddMapping = (mapping: any) => {
-    console.log("Adding mapping:", mapping);
-  };
+  const filteredMappings = useMemo(() => {
+    const q = searchTerm.toLowerCase();
+    return mappings.filter(
+      (m) =>
+        m.canonicalSku.toLowerCase().includes(q) ||
+        m.name.toLowerCase().includes(q) ||
+        (m.reverbTitle ?? "").toLowerCase().includes(q) ||
+        (m.reverbSku ?? "").toLowerCase().includes(q)
+    );
+  }, [mappings, searchTerm]);
 
   const handleImport = () => {
-    toast.success("Import started", {
-      description: "Importing SKU list from file...",
+    startImport(async () => {
+      const { data, error } = await importCatalogs();
+      if (error) {
+        toast.error("Import failed", { description: error });
+        return;
+      }
+      toast.success("Catalogs imported", {
+        description: `${data?.katanaVariants ?? 0} Katana variants, ${data?.reverbListings ?? 0} Reverb listings`,
+      });
+      router.refresh();
+    });
+  };
+
+  const handleSuggest = () => {
+    startSuggest(async () => {
+      const { data, error } = await autoSuggestMatches();
+      if (error) {
+        toast.error("Auto-suggest failed", { description: error });
+        return;
+      }
+      setSuggestions(data ?? []);
+      toast.success(`${data?.length ?? 0} suggestion(s)`, {
+        description: "Review and accept the matches below",
+      });
+    });
+  };
+
+  const handleAcceptSuggestion = (s: SuggestedMatch) => {
+    startSave(async () => {
+      const { error } = await createMapping({
+        katanaVariantId: s.katanaVariantId,
+        reverbListingId: s.reverbListingId,
+      });
+      if (error) {
+        toast.error("Could not create mapping", { description: error });
+        return;
+      }
+      toast.success("Mapping created", { description: s.katanaLabel });
+      setSuggestions((prev) => prev?.filter((x) => x.katanaVariantId !== s.katanaVariantId) ?? null);
+      router.refresh();
+    });
+  };
+
+  const handleAdd = () => {
+    if (!addKatana || !addReverb) {
+      toast.error("Select both a Katana variant and a Reverb listing");
+      return;
+    }
+    startSave(async () => {
+      const { error } = await createMapping({
+        katanaVariantId: addKatana,
+        reverbListingId: addReverb,
+      });
+      if (error) {
+        toast.error("Could not create mapping", { description: error });
+        return;
+      }
+      toast.success("Mapping created");
+      setAddOpen(false);
+      setAddKatana(null);
+      setAddReverb(null);
+      router.refresh();
+    });
+  };
+
+  const handleEdit = () => {
+    if (!editRow || !editReverb) {
+      toast.error("Select a Reverb listing");
+      return;
+    }
+    startSave(async () => {
+      const { error } = await updateMapping({
+        inventoryItemId: editRow.inventoryItemId,
+        reverbListingId: editReverb,
+      });
+      if (error) {
+        toast.error("Could not update mapping", { description: error });
+        return;
+      }
+      toast.success("Mapping updated");
+      setEditRow(null);
+      setEditReverb(null);
+      router.refresh();
+    });
+  };
+
+  const handleDelete = (row: MappingRow) => {
+    if (!confirm(`Remove mapping for ${row.canonicalSku}? This unlinks Katana and Reverb for this item.`)) {
+      return;
+    }
+    startSave(async () => {
+      const { error } = await deleteMapping(row.inventoryItemId);
+      if (error) {
+        toast.error("Could not delete mapping", { description: error });
+        return;
+      }
+      toast.success("Mapping removed");
+      router.refresh();
     });
   };
 
   const handleExport = () => {
-    toast.success("Export started", {
-      description: "Downloading SKU mappings as CSV...",
-    });
+    const header = "canonical_sku,name,katana_variant_id,reverb_listing_id,reverb_sku,reverb_title\n";
+    const rows = mappings
+      .map((m) =>
+        [
+          m.canonicalSku,
+          `"${m.name.replace(/"/g, '""')}"`,
+          m.katanaVariantId ?? "",
+          m.reverbListingId ?? "",
+          m.reverbSku ?? "",
+          `"${(m.reverbTitle ?? "").replace(/"/g, '""')}"`,
+        ].join(",")
+      )
+      .join("\n");
+    const blob = new Blob([header + rows], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "sku-mappings.csv";
+    a.click();
+    URL.revokeObjectURL(url);
   };
+
+  const notImported = katanaImported === 0 && reverbImported === 0;
 
   return (
     <div className="space-y-6">
@@ -305,21 +328,37 @@ export function SKUMappingClient({ skuMappings, inventoryItems, error }: SKUMapp
         <div>
           <h1 className="text-2xl font-bold tracking-tight">SKU Mapping Manager</h1>
           <p className="text-muted-foreground">
-            Map items between Katana, Reverb, Shopify, and ShopFlow
+            Link Katana variants to Reverb listings (Reverb listings have no SKU, so
+            matching is by listing ID)
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleImport}>
-            <Upload className="mr-2 size-4" />
-            Import
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={handleImport} disabled={isImporting}>
+            <RefreshCw className={cn("mr-2 size-4", isImporting && "animate-spin")} />
+            {isImporting ? "Importing..." : "Import catalogs"}
           </Button>
-          <Button variant="outline" size="sm" onClick={handleExport}>
+          <Button variant="outline" size="sm" onClick={handleSuggest} disabled={isSuggesting || notImported}>
+            <Sparkles className={cn("mr-2 size-4", isSuggesting && "animate-spin")} />
+            Auto-suggest
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExport} disabled={mappings.length === 0}>
             <Download className="mr-2 size-4" />
             Export
           </Button>
-          <AddMappingDialog onAdd={handleAddMapping} />
+          <Button onClick={() => setAddOpen(true)} disabled={notImported}>
+            <Plus className="mr-2 size-4" />
+            Add Mapping
+          </Button>
         </div>
       </div>
+
+      <PageIntro icon={Info}>
+        This is the foundation for every sync. Because Reverb SKUs and Katana SKUs do not match,
+        each Katana variant must be linked to its Reverb listing here. <strong>Import catalogs</strong>{" "}
+        pulls the latest variants and listings from both platforms, <strong>Auto-suggest</strong>{" "}
+        proposes likely matches you can accept, and you can add or edit mappings manually. Only
+        mapped items appear on the Inventory Sync page and are kept in sync.
+      </PageIntro>
 
       {error && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4">
@@ -327,102 +366,67 @@ export function SKUMappingClient({ skuMappings, inventoryItems, error }: SKUMapp
         </div>
       )}
 
+      {notImported && (
+        <div className="rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+          No catalog data yet. Click <strong>Import catalogs</strong> to pull Katana
+          variants and Reverb listings, then map them (or use Auto-suggest).
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-primary/10 p-2.5">
-                <Link2 className="size-5 text-primary" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{totalMappings}</p>
-                <p className="text-xs text-muted-foreground">Active Mappings</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-secondary/10 p-2.5">
-                <CheckCircle2 className="size-5 text-secondary" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{mappings.length}</p>
-                <p className="text-xs text-muted-foreground">Katana Items</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-warning/10 p-2.5">
-                <AlertTriangle className="size-5 text-warning" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{unmappedCount}</p>
-                <p className="text-xs text-muted-foreground">Needs Mapping</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-accent/10 p-2.5">
-                <ArrowRight className="size-5 text-accent" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{platforms.length}</p>
-                <p className="text-xs text-muted-foreground">Platforms</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <StatCard icon={Link2} value={mappings.length} label="Mapped Items" tone="bg-primary/10 text-primary" />
+        <StatCard icon={CheckCircle2} value={katanaImported} label="Katana Variants" tone="bg-secondary/10 text-secondary" />
+        <StatCard icon={AlertTriangle} value={unmappedKatana.length} label="Unmapped Katana" tone="bg-warning/10 text-warning" />
+        <StatCard icon={XCircle} value={unmappedReverb.length} label="Unmapped Reverb" tone="bg-accent/10 text-accent" />
       </div>
+
+      {suggestions && suggestions.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg">Suggested Matches</CardTitle>
+            <CardDescription>
+              Fuzzy matches between unmapped Katana variants and Reverb listings - confirm to create the mapping
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {suggestions.map((s) => (
+              <div
+                key={s.katanaVariantId}
+                className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
+                  <span className="font-medium">{s.katanaLabel}</span>
+                  <span className="text-muted-foreground">
+                    to <span className="text-foreground">{s.reverbTitle}</span>
+                  </span>
+                  <Badge variant="outline" className="w-fit text-xs">
+                    {Math.round(s.score * 100)}%
+                  </Badge>
+                </div>
+                <Button size="sm" onClick={() => handleAcceptSuggestion(s)} disabled={isSaving}>
+                  Accept
+                </Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="pb-4">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="text-lg">SKU Mappings</CardTitle>
-              <CardDescription>
-                {filteredMappings.length} items - {unmappedCount} incomplete
-              </CardDescription>
+              <CardDescription>{filteredMappings.length} mapped items</CardDescription>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search SKUs..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-64 pl-8"
-                />
-              </div>
-              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="Category" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Categories</SelectItem>
-                  <SelectItem value="FINISHED_GOOD">Finished Goods</SelectItem>
-                  <SelectItem value="RAW_MATERIAL">Raw Materials</SelectItem>
-                  <SelectItem value="COMPONENT">Components</SelectItem>
-                </SelectContent>
-              </Select>
-              <Select value={platformFilter} onValueChange={setPlatformFilter}>
-                <SelectTrigger className="w-36">
-                  <SelectValue placeholder="Platform" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Platforms</SelectItem>
-                  {platforms.map((p) => (
-                    <SelectItem key={p} value={p}>{p}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+              <Input
+                placeholder="Search mappings..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-64 pl-8"
+              />
             </div>
           </div>
         </CardHeader>
@@ -431,84 +435,155 @@ export function SKUMappingClient({ skuMappings, inventoryItems, error }: SKUMapp
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Katana SKU</TableHead>
-                  <TableHead>Product Name</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Reverb</TableHead>
-                  <TableHead>Shopify</TableHead>
-                  <TableHead>ShopFlow</TableHead>
+                  <TableHead>Canonical SKU</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Katana Variant</TableHead>
+                  <TableHead>Reverb Listing</TableHead>
                   <TableHead className="w-20">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredMappings.map((mapping, index) => {
-                  const reverbMapping = mapping.mappings.find(m => m.platform === "REVERB");
-                  const shopifyMapping = mapping.mappings.find(m => m.platform === "SHOPIFY");
-                  const shopflowMapping = mapping.mappings.find(m => m.platform === "SHOPFLOW");
-
-                  const getMappingCell = (m: typeof reverbMapping) => {
-                    if (!m || !m.externalSku) {
-                      return (
-                        <span className="flex items-center gap-1 text-muted-foreground">
-                          <XCircle className="size-3.5" />
-                          Not mapped
-                        </span>
-                      );
-                    }
-                    return (
-                      <div className="flex items-center gap-1">
-                        {m.isActive ? (
-                          <CheckCircle2 className="size-3.5 text-accent" />
-                        ) : (
-                          <XCircle className="size-3.5 text-muted-foreground" />
-                        )}
-                        <span className={cn("font-mono text-xs", !m.isActive && "text-muted-foreground")}>
-                          {m.externalSku}
-                        </span>
-                      </div>
-                    );
-                  };
-
-                  return (
+                {filteredMappings.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                      No mappings yet
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredMappings.map((m, index) => (
                     <motion.tr
-                      key={mapping.id}
-                      initial={{ opacity: 0, y: 10 }}
+                      key={m.inventoryItemId}
+                      initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.02 }}
                       className="border-b transition-colors hover:bg-muted/50"
                     >
-                      <TableCell className="font-mono text-sm font-medium">
-                        {mapping.katanaSku}
-                      </TableCell>
-                      <TableCell className="max-w-48 truncate">
-                        {mapping.katanaName}
-                      </TableCell>
+                      <TableCell className="font-mono text-sm font-medium">{m.canonicalSku}</TableCell>
+                      <TableCell className="max-w-48 truncate">{m.name}</TableCell>
+                      <TableCell className="font-mono text-xs">{m.katanaVariantId ?? "-"}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="text-xs">
-                          {mapping.category.replace("_", " ")}
-                        </Badge>
+                        {m.reverbListingId ? (
+                          <div className="flex items-center gap-1">
+                            <CheckCircle2 className="size-3.5 text-accent" />
+                            <span className="max-w-48 truncate text-xs">{m.reverbTitle ?? m.reverbListingId}</span>
+                          </div>
+                        ) : (
+                          <span className="flex items-center gap-1 text-muted-foreground">
+                            <XCircle className="size-3.5" /> Not mapped
+                          </span>
+                        )}
                       </TableCell>
-                      <TableCell>{getMappingCell(reverbMapping)}</TableCell>
-                      <TableCell>{getMappingCell(shopifyMapping)}</TableCell>
-                      <TableCell>{getMappingCell(shopflowMapping)}</TableCell>
                       <TableCell>
                         <div className="flex gap-1">
-                          <Button variant="ghost" size="icon" className="size-8">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-8"
+                            onClick={() => {
+                              setEditRow(m);
+                              setEditReverb(m.reverbListingId);
+                            }}
+                          >
                             <Edit2 className="size-3.5" />
                           </Button>
-                          <Button variant="ghost" size="icon" className="size-8 text-destructive hover:text-destructive">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-8 text-destructive hover:text-destructive"
+                            onClick={() => handleDelete(m)}
+                            disabled={isSaving}
+                          >
                             <Trash2 className="size-3.5" />
                           </Button>
                         </div>
                       </TableCell>
                     </motion.tr>
-                  );
-                })}
+                  ))
+                )}
               </TableBody>
             </Table>
           </div>
         </CardContent>
       </Card>
+
+      {/* Add mapping dialog */}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Create SKU Mapping</DialogTitle>
+            <DialogDescription>
+              Link an unmapped Katana variant to an unmapped Reverb listing
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Katana variant ({unmappedKatana.length} unmapped)</Label>
+              <SearchablePicker
+                items={unmappedKatana}
+                getKey={(i) => i.variantId}
+                getPrimary={(i) => [i.productName, i.variantName].filter(Boolean).join(" - ")}
+                getSecondary={(i) => i.sku ?? i.variantId}
+                value={addKatana}
+                onChange={setAddKatana}
+                placeholder="Search Katana variants..."
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Reverb listing ({unmappedReverb.length} unmapped)</Label>
+              <SearchablePicker
+                items={unmappedReverb}
+                getKey={(i) => i.listingId}
+                getPrimary={(i) => i.title}
+                getSecondary={(i) => `${i.listingId}${i.state ? ` - ${i.state}` : ""}`}
+                value={addReverb}
+                onChange={setAddReverb}
+                placeholder="Search Reverb listings..."
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
+            <Button onClick={handleAdd} disabled={isSaving || !addKatana || !addReverb}>
+              Create Mapping
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit mapping dialog */}
+      <Dialog open={!!editRow} onOpenChange={(open) => !open && setEditRow(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Reverb Mapping</DialogTitle>
+            <DialogDescription>
+              {editRow ? `Change the Reverb listing linked to ${editRow.canonicalSku}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label>Reverb listing</Label>
+            <SearchablePicker
+              items={unmappedReverb}
+              getKey={(i) => i.listingId}
+              getPrimary={(i) => i.title}
+              getSecondary={(i) => `${i.listingId}${i.state ? ` - ${i.state}` : ""}`}
+              value={editReverb}
+              onChange={setEditReverb}
+              placeholder="Search Reverb listings..."
+            />
+            {editRow?.reverbTitle && (
+              <p className="text-xs text-muted-foreground">
+                Currently: {editRow.reverbTitle}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditRow(null)}>Cancel</Button>
+            <Button onClick={handleEdit} disabled={isSaving || !editReverb}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,0 +1,309 @@
+import "server-only";
+
+import {
+  IntegrationPlatform,
+  SyncDirection,
+  SyncStatus,
+  SyncType,
+  AlertSeverity,
+  AlertType,
+} from "@prisma/client";
+import prisma from "@/lib/prisma";
+import { getIntegrationConfig } from "./config";
+import { katana, netAvailable, type KatanaInventory } from "./katana";
+import { reverb, type ReverbListing } from "./reverb";
+import { listSyncableItems } from "./sku-resolver";
+import { recordSyncLog, recordAlert, touchIntegrationLastSync } from "./sync-logger";
+
+export interface ReverbSyncItemResult {
+  canonicalSku: string;
+  reverbSku: string | null;
+  reverbListingId: string | null;
+  previousQty: number | null;
+  targetQty: number;
+  action: "updated" | "unpublished" | "noop" | "skipped" | "failed" | "would-update" | "would-unpublish";
+  dryRun: boolean;
+  error?: string;
+}
+
+export interface ReverbSyncRunResult {
+  startedAt: string;
+  finishedAt: string;
+  writesEnabled: boolean;
+  totalConsidered: number;
+  updated: number;
+  unpublished: number;
+  noop: number;
+  skipped: number;
+  failed: number;
+  items: ReverbSyncItemResult[];
+}
+
+/**
+ * Pushes Katana "available to sell" (in_stock - committed) quantities onto the
+ * matching Reverb listings. When Katana availability hits 0 the Reverb listing
+ * is unpublished (per client decision). All writes respect the Reverb feature
+ * flag - with writes off, we run a full dry-run and log exactly what WOULD
+ * happen without touching Reverb.
+ */
+export async function runKatanaToReverbSync(options: {
+  locationIds?: number[];
+  /** Override only specific canonical SKUs (used by webhooks). */
+  onlyCanonicalSkus?: string[];
+} = {}): Promise<ReverbSyncRunResult> {
+  const startedAt = new Date();
+  const { flags } = getIntegrationConfig();
+  const writesEnabled = flags.reverbWritesEnabled;
+
+  console.log(
+    `[ReverbSync] Starting Katana -> Reverb sync (writes ${writesEnabled ? "ENABLED" : "DISABLED - dry run"})`
+  );
+
+  const result: ReverbSyncRunResult = {
+    startedAt: startedAt.toISOString(),
+    finishedAt: startedAt.toISOString(),
+    writesEnabled,
+    totalConsidered: 0,
+    updated: 0,
+    unpublished: 0,
+    noop: 0,
+    skipped: 0,
+    failed: 0,
+    items: [],
+  };
+
+  let syncable = await listSyncableItems();
+  if (options.onlyCanonicalSkus?.length) {
+    const set = new Set(options.onlyCanonicalSkus);
+    syncable = syncable.filter((s) => set.has(s.canonicalSku));
+  }
+  result.totalConsidered = syncable.length;
+
+  console.log(`[ReverbSync] Resolving inventory for ${syncable.length} mapped items...`);
+
+  // Pull Katana inventory in one batch keyed by variant id.
+  const variantIds = syncable
+    .map((s) => Number(s.katanaVariantId))
+    .filter((n) => Number.isFinite(n));
+
+  let inventoryByVariant = new Map<number, KatanaInventory>();
+  try {
+    const inventory = await katana.getInventoryForVariants({
+      variantIds,
+      locationIds: options.locationIds,
+      limit: 250,
+    });
+    inventoryByVariant = aggregateInventory(inventory);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.error("[ReverbSync] Failed to fetch Katana inventory:", msg);
+    await recordSyncLog({
+      syncType: SyncType.INVENTORY_QUANTITY,
+      platform: IntegrationPlatform.KATANA,
+      status: SyncStatus.FAILED,
+      direction: SyncDirection.INBOUND,
+      errorMessage: msg,
+      details: "Batch inventory fetch from Katana failed",
+    });
+    await recordAlert({
+      type: AlertType.CONNECTION_ERROR,
+      severity: AlertSeverity.ERROR,
+      title: "Katana inventory fetch failed",
+      message: msg,
+      relatedPlatform: IntegrationPlatform.KATANA,
+    });
+    result.finishedAt = new Date().toISOString();
+    return result;
+  }
+
+  for (const item of syncable) {
+    const variantId = Number(item.katanaVariantId);
+    const inv = inventoryByVariant.get(variantId);
+    const targetQty = inv ? netAvailable(inv) : 0;
+
+    const itemResult: ReverbSyncItemResult = {
+      canonicalSku: item.canonicalSku,
+      reverbSku: item.reverbSku,
+      reverbListingId: item.reverbListingId,
+      previousQty: null,
+      targetQty,
+      action: "skipped",
+      dryRun: !writesEnabled,
+    };
+
+    try {
+      const listing = await loadReverbListing(item.reverbListingId, item.reverbSku);
+      if (!listing) {
+        itemResult.action = "skipped";
+        itemResult.error = "Reverb listing not found";
+        result.skipped++;
+        await recordSyncLog({
+          syncType: SyncType.LISTING_UPDATE,
+          platform: IntegrationPlatform.REVERB,
+          status: SyncStatus.SKIPPED,
+          direction: SyncDirection.OUTBOUND,
+          inventoryItemId: item.inventoryItemId,
+          errorMessage: "Reverb listing not found",
+          details: `No Reverb listing for canonical SKU ${item.canonicalSku}`,
+        });
+        result.items.push(itemResult);
+        continue;
+      }
+
+      itemResult.previousQty = listing.inventory ?? null;
+      const shouldUnpublish = targetQty <= 0;
+      const isLive = listing.state?.slug === "live";
+      const currentQty = listing.inventory ?? 0;
+
+      // Decide the action.
+      if (shouldUnpublish) {
+        if (!isLive && currentQty === 0) {
+          itemResult.action = "noop";
+          result.noop++;
+        } else if (!writesEnabled) {
+          itemResult.action = "would-unpublish";
+          result.unpublished++;
+          console.log(
+            `[ReverbSync] [dry-run] would UNPUBLISH ${item.canonicalSku} (reverb ${listing.id}) qty ${currentQty} -> 0`
+          );
+        } else {
+          await reverb.unpublishListing(listing);
+          itemResult.action = "unpublished";
+          result.unpublished++;
+          console.log(
+            `[ReverbSync] UNPUBLISHED ${item.canonicalSku} (reverb ${listing.id})`
+          );
+        }
+      } else if (currentQty === targetQty && isLive) {
+        itemResult.action = "noop";
+        result.noop++;
+      } else if (!writesEnabled) {
+        itemResult.action = "would-update";
+        result.updated++;
+        console.log(
+          `[ReverbSync] [dry-run] would UPDATE ${item.canonicalSku} (reverb ${listing.id}) qty ${currentQty} -> ${targetQty}`
+        );
+      } else {
+        await reverb.updateListingInventory(listing, {
+          inventory: targetQty,
+          has_inventory: true,
+          publish: true,
+        });
+        itemResult.action = "updated";
+        result.updated++;
+        console.log(
+          `[ReverbSync] UPDATED ${item.canonicalSku} (reverb ${listing.id}) qty ${currentQty} -> ${targetQty}`
+        );
+      }
+
+      await recordSyncLog({
+        syncType:
+          itemResult.action.includes("unpublish")
+            ? SyncType.LISTING_UPDATE
+            : SyncType.INVENTORY_QUANTITY,
+        platform: IntegrationPlatform.REVERB,
+        status:
+          itemResult.action === "noop"
+            ? SyncStatus.SKIPPED
+            : writesEnabled
+              ? SyncStatus.SUCCESS
+              : SyncStatus.SKIPPED,
+        direction: SyncDirection.OUTBOUND,
+        inventoryItemId: item.inventoryItemId,
+        previousValue: { inventory: currentQty, state: listing.state?.slug },
+        newValue: { inventory: targetQty, action: itemResult.action },
+        details: writesEnabled
+          ? `Reverb listing ${listing.id} ${itemResult.action}`
+          : `[dry-run] Reverb listing ${listing.id} ${itemResult.action}`,
+      });
+
+      // Keep local cache fresh for the dashboard.
+      await prisma.inventoryItem.update({
+        where: { id: item.inventoryItemId },
+        data: {
+          katanaQty: inv ? Math.floor(parseFloat(inv.quantity_in_stock || "0")) : 0,
+          reverbQty: targetQty,
+          isReadyToShip: targetQty > 0,
+          lastReverbSyncAt: writesEnabled ? new Date() : undefined,
+          lastKatanaSyncAt: new Date(),
+        },
+      }).catch((e) => console.error("[ReverbSync] local cache update failed:", e));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      itemResult.action = "failed";
+      itemResult.error = msg;
+      result.failed++;
+      console.error(`[ReverbSync] FAILED ${item.canonicalSku}:`, msg);
+      await recordSyncLog({
+        syncType: SyncType.INVENTORY_QUANTITY,
+        platform: IntegrationPlatform.REVERB,
+        status: SyncStatus.FAILED,
+        direction: SyncDirection.OUTBOUND,
+        inventoryItemId: item.inventoryItemId,
+        newValue: { targetQty },
+        errorMessage: msg,
+        details: `Failed syncing canonical SKU ${item.canonicalSku} to Reverb`,
+      });
+      await recordAlert({
+        type: AlertType.SYNC_FAILURE,
+        severity: AlertSeverity.ERROR,
+        title: `Reverb sync failed for ${item.canonicalSku}`,
+        message: msg,
+        relatedSku: item.canonicalSku,
+        relatedPlatform: IntegrationPlatform.REVERB,
+      });
+    }
+
+    result.items.push(itemResult);
+  }
+
+  await touchIntegrationLastSync(IntegrationPlatform.REVERB, true);
+
+  result.finishedAt = new Date().toISOString();
+  console.log(
+    `[ReverbSync] Done. updated=${result.updated} unpublished=${result.unpublished} noop=${result.noop} skipped=${result.skipped} failed=${result.failed}`
+  );
+  return result;
+}
+
+async function loadReverbListing(
+  listingId: string | null,
+  reverbSku: string | null
+): Promise<ReverbListing | null> {
+  if (listingId) {
+    try {
+      return await reverb.getListingByHref(`/listings/${listingId}`);
+    } catch (err) {
+      console.warn(
+        `[ReverbSync] direct listing fetch failed for ${listingId}, falling back to SKU lookup`
+      );
+    }
+  }
+  if (reverbSku) {
+    return reverb.findListingBySku(reverbSku, "all");
+  }
+  return null;
+}
+
+/** Sum stock across locations per variant so multi-location items net correctly. */
+function aggregateInventory(
+  rows: KatanaInventory[]
+): Map<number, KatanaInventory> {
+  const byVariant = new Map<number, KatanaInventory>();
+  for (const row of rows) {
+    const existing = byVariant.get(row.variant_id);
+    if (!existing) {
+      byVariant.set(row.variant_id, { ...row });
+      continue;
+    }
+    existing.quantity_in_stock = String(
+      parseFloat(existing.quantity_in_stock || "0") +
+        parseFloat(row.quantity_in_stock || "0")
+    );
+    existing.quantity_committed = String(
+      parseFloat(existing.quantity_committed || "0") +
+        parseFloat(row.quantity_committed || "0")
+    );
+  }
+  return byVariant;
+}

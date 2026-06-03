@@ -1,20 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   FileText,
   Search,
-  Filter,
   RefreshCw,
   CheckCircle2,
   XCircle,
   AlertTriangle,
-  Clock,
-  Download,
   Eye,
-  RotateCcw,
-  Trash2,
   Bell,
   X,
 } from "lucide-react";
@@ -41,7 +37,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -53,32 +48,10 @@ import {
 } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-
-interface SyncLog {
-  id: string;
-  syncType: string;
-  platform: string;
-  status: string;
-  direction: string;
-  inventoryItem: { sku: string; name: string } | null;
-  previousValue: any;
-  newValue: any;
-  errorMessage: string | null;
-  details: string | null;
-  createdAt: string;
-}
-
-interface Alert {
-  id: string;
-  type: string;
-  severity: string;
-  title: string;
-  message: string;
-  relatedSku: string | null;
-  isRead: boolean;
-  isDismissed: boolean;
-  createdAt: string;
-}
+import { EmptyState } from "@/components/empty-state";
+import { PageIntro } from "@/components/page-intro";
+import { Info } from "lucide-react";
+import { dismissAlert } from "@/lib/integration-actions";
 
 interface SyncLogsClientProps {
   syncLogs: any[] | null;
@@ -86,76 +59,95 @@ interface SyncLogsClientProps {
   error: string | null;
 }
 
-interface MockLog {
+interface LogRow {
   id: string;
   syncType: string;
   platform: string;
-  status: "SUCCESS" | "FAILED" | "PARTIAL" | "PENDING";
-  direction: "INBOUND" | "OUTBOUND" | "BIDIRECTIONAL";
+  status: string;
+  direction: string;
   sku: string | null;
   itemName: string | null;
   previousValue: string | null;
   newValue: string | null;
   errorMessage: string | null;
+  details: string | null;
   createdAt: string;
 }
 
-const mockLogs: MockLog[] = [
-  { id: "1", syncType: "INVENTORY_QUANTITY", platform: "KATANA", status: "SUCCESS", direction: "OUTBOUND", sku: "CG-TELE-001", itemName: "Classic Telecaster", previousValue: "4", newValue: "5", errorMessage: null, createdAt: "2024-01-15T10:30:00Z" },
-  { id: "2", syncType: "INVENTORY_QUANTITY", platform: "REVERB", status: "SUCCESS", direction: "OUTBOUND", sku: "CG-TELE-001", itemName: "Classic Telecaster", previousValue: "4", newValue: "5", errorMessage: null, createdAt: "2024-01-15T10:31:00Z" },
-  { id: "3", syncType: "INVENTORY_COST", platform: "SHOPFLOW", status: "SUCCESS", direction: "OUTBOUND", sku: "CG-STRAT-002", itemName: "Modern Stratocaster", previousValue: "$780.00", newValue: "$845.00", errorMessage: null, createdAt: "2024-01-15T10:30:00Z" },
-  { id: "4", syncType: "INVENTORY_QUANTITY", platform: "SHOPIFY", status: "FAILED", direction: "OUTBOUND", sku: "CG-LP-003", itemName: "Les Paul Custom", previousValue: "2", newValue: null, errorMessage: "API rate limit exceeded. Retry in 60 seconds.", createdAt: "2024-01-15T10:29:00Z" },
-  { id: "5", syncType: "PRODUCTION_CONSUMPTION", platform: "KATANA", status: "SUCCESS", direction: "OUTBOUND", sku: "RAW-WOOD-ASH", itemName: "Swamp Ash Body Blank", previousValue: "10", newValue: "8", errorMessage: null, createdAt: "2024-01-15T10:15:00Z" },
-  { id: "6", syncType: "ORDER_SYNC", platform: "REVERB", status: "SUCCESS", direction: "INBOUND", sku: null, itemName: null, previousValue: null, newValue: "Order #RV-12345", errorMessage: null, createdAt: "2024-01-15T10:00:00Z" },
-  { id: "7", syncType: "LISTING_UPDATE", platform: "REVERB", status: "PARTIAL", direction: "OUTBOUND", sku: "CG-335-004", itemName: "Semi-Hollow 335", previousValue: "Qty: 2, Price: $2899", newValue: "Qty: 1 (price unchanged)", errorMessage: "Price update skipped - preserve price enabled", createdAt: "2024-01-15T09:45:00Z" },
-  { id: "8", syncType: "INVENTORY_QUANTITY", platform: "KATANA", status: "SUCCESS", direction: "OUTBOUND", sku: "CG-JAZZ-005", itemName: "Jazz Bass", previousValue: "3", newValue: "4", errorMessage: null, createdAt: "2024-01-15T09:30:00Z" },
-  { id: "9", syncType: "SKU_MAPPING", platform: "SHOPIFY", status: "SUCCESS", direction: "BIDIRECTIONAL", sku: "CG-PRS-006", itemName: "PRS Style", previousValue: null, newValue: "Mapped to SH-PRS-AF", errorMessage: null, createdAt: "2024-01-15T09:00:00Z" },
-  { id: "10", syncType: "INVENTORY_QUANTITY", platform: "REVERB", status: "FAILED", direction: "OUTBOUND", sku: "CG-TELE-002", itemName: "Telecaster Deluxe", previousValue: "1", newValue: null, errorMessage: "Listing not found on Reverb. SKU may have been removed.", createdAt: "2024-01-15T08:30:00Z" },
-];
-
-interface MockAlert {
-  id: string;
-  type: string;
-  severity: "INFO" | "WARNING" | "ERROR" | "CRITICAL";
-  title: string;
-  message: string;
-  relatedSku: string | null;
-  isRead: boolean;
-  createdAt: string;
+function formatValue(value: any): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
 }
 
-const mockAlerts: MockAlert[] = [
-  { id: "1", type: "SYNC_FAILURE", severity: "ERROR", title: "Shopify Sync Failed", message: "API rate limit exceeded when syncing CG-LP-003. Will retry automatically.", relatedSku: "CG-LP-003", isRead: false, createdAt: "2024-01-15T10:29:00Z" },
-  { id: "2", type: "QUANTITY_MISMATCH", severity: "WARNING", title: "Quantity Mismatch Detected", message: "CG-STRAT-002 shows different quantities: Katana (3), Shopify (2). Manual review recommended.", relatedSku: "CG-STRAT-002", isRead: false, createdAt: "2024-01-15T10:00:00Z" },
-  { id: "3", type: "LOW_STOCK", severity: "WARNING", title: "Low Stock Alert", message: "Nitrocellulose Lacquer (RAW-NCL-001) is below reorder point. Current qty: 3, Reorder at: 5.", relatedSku: "RAW-NCL-001", isRead: true, createdAt: "2024-01-15T09:00:00Z" },
-  { id: "4", type: "CONNECTION_ERROR", severity: "INFO", title: "ManageMarkets Disconnected", message: "ManageMarkets integration is not connected. Connect to enable international shipping features.", relatedSku: null, isRead: true, createdAt: "2024-01-14T12:00:00Z" },
-];
+const SYNC_TYPE_LABELS: Record<string, string> = {
+  INVENTORY_QUANTITY: "Inventory Qty",
+  INVENTORY_COST: "Cost Sync",
+  PRODUCTION_CONSUMPTION: "Production",
+  ORDER_SYNC: "Order Sync",
+  SKU_MAPPING: "SKU Mapping",
+  LISTING_UPDATE: "Listing Update",
+};
 
 export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps) {
+  const router = useRouter();
   const [searchTerm, setSearchTerm] = useState("");
   const [syncTypeFilter, setSyncTypeFilter] = useState<string>("all");
   const [platformFilter, setPlatformFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [selectedLog, setSelectedLog] = useState<MockLog | null>(null);
+  const [selectedLog, setSelectedLog] = useState<LogRow | null>(null);
+  const [isRefreshing, startRefresh] = useTransition();
+  const [isDismissing, startDismiss] = useTransition();
 
-  const logs = mockLogs;
-  const alertData = mockAlerts;
+  const logs: LogRow[] = (syncLogs ?? []).map((log: any) => ({
+    id: log.id,
+    syncType: log.syncType,
+    platform: log.platform,
+    status: log.status,
+    direction: log.direction,
+    sku: log.inventoryItem?.sku ?? null,
+    itemName: log.inventoryItem?.name ?? null,
+    previousValue: formatValue(log.previousValue),
+    newValue: formatValue(log.newValue),
+    errorMessage: log.errorMessage ?? null,
+    details: log.details ?? null,
+    createdAt: typeof log.createdAt === "string" ? log.createdAt : new Date(log.createdAt).toISOString(),
+  }));
 
-  const filteredLogs = logs.filter(log => {
-    const matchesSearch = 
+  const alertData = alerts ?? [];
+
+  const filteredLogs = logs.filter((log) => {
+    const matchesSearch =
+      searchTerm === "" ||
       (log.sku?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false) ||
       (log.itemName?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false);
-    
     const matchesSyncType = syncTypeFilter === "all" || log.syncType === syncTypeFilter;
     const matchesPlatform = platformFilter === "all" || log.platform === platformFilter;
     const matchesStatus = statusFilter === "all" || log.status === statusFilter;
-
-    return (searchTerm === "" || matchesSearch) && matchesSyncType && matchesPlatform && matchesStatus;
+    return matchesSearch && matchesSyncType && matchesPlatform && matchesStatus;
   });
 
-  const unreadAlerts = alertData.filter(a => !a.isRead);
-  const successCount = logs.filter(l => l.status === "SUCCESS").length;
-  const failedCount = logs.filter(l => l.status === "FAILED").length;
+  const successCount = logs.filter((l) => l.status === "SUCCESS").length;
+  const failedCount = logs.filter((l) => l.status === "FAILED").length;
+
+  const handleRefresh = () => {
+    startRefresh(() => {
+      router.refresh();
+      toast.success("Logs refreshed");
+    });
+  };
+
+  const handleDismissAlert = (alertId: string) => {
+    startDismiss(async () => {
+      const { error } = await dismissAlert(alertId);
+      if (error) {
+        toast.error("Could not dismiss alert", { description: error });
+        return;
+      }
+      toast.success("Alert dismissed");
+      router.refresh();
+    });
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -182,27 +174,7 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
     }
   };
 
-  const handleRetry = (logId: string) => {
-    toast.success("Sync retry queued", {
-      description: "The sync will be retried shortly",
-    });
-  };
-
-  const handleDismissAlert = (alertId: string) => {
-    toast.success("Alert dismissed");
-  };
-
-  const formatSyncType = (type: string) => {
-    const map: Record<string, string> = {
-      INVENTORY_QUANTITY: "Inventory Qty",
-      INVENTORY_COST: "Cost Sync",
-      PRODUCTION_CONSUMPTION: "Production",
-      ORDER_SYNC: "Order Sync",
-      SKU_MAPPING: "SKU Mapping",
-      LISTING_UPDATE: "Listing Update",
-    };
-    return map[type] || type;
-  };
+  const formatSyncType = (type: string) => SYNC_TYPE_LABELS[type] || type;
 
   return (
     <div className="space-y-6">
@@ -213,17 +185,18 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
             Monitor sync activity, view errors, and manage alerts
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm">
-            <Download className="mr-2 size-4" />
-            Export Logs
-          </Button>
-          <Button size="sm">
-            <RefreshCw className="mr-2 size-4" />
-            Refresh
-          </Button>
-        </div>
+        <Button size="sm" onClick={handleRefresh} disabled={isRefreshing}>
+          <RefreshCw className={cn("mr-2 size-4", isRefreshing && "animate-spin")} />
+          Refresh
+        </Button>
       </div>
+
+      <PageIntro icon={Info}>
+        This is the audit trail for everything the system does. Each automatic or manual sync,
+        every Reverb sale that decrements Katana, and any failure is recorded here so you can see
+        what changed and when. Alerts flag anything that needs attention (for example an unmapped
+        sale or an API error); dismiss them once handled.
+      </PageIntro>
 
       {error && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4">
@@ -240,7 +213,7 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
               </div>
               <div>
                 <p className="text-2xl font-bold">{logs.length}</p>
-                <p className="text-xs text-muted-foreground">Total Syncs Today</p>
+                <p className="text-xs text-muted-foreground">Recent Sync Events</p>
               </div>
             </div>
           </CardContent>
@@ -278,7 +251,7 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                 <AlertTriangle className="size-5 text-warning" />
               </div>
               <div>
-                <p className="text-2xl font-bold">{unreadAlerts.length}</p>
+                <p className="text-2xl font-bold">{alertData.length}</p>
                 <p className="text-xs text-muted-foreground">Active Alerts</p>
               </div>
             </div>
@@ -291,9 +264,9 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
           <TabsTrigger value="logs">Sync Logs</TabsTrigger>
           <TabsTrigger value="alerts" className="relative">
             Alerts
-            {unreadAlerts.length > 0 && (
+            {alertData.length > 0 && (
               <span className="ml-2 flex size-5 items-center justify-center rounded-full bg-destructive text-xs text-destructive-foreground">
-                {unreadAlerts.length}
+                {alertData.length}
               </span>
             )}
           </TabsTrigger>
@@ -325,7 +298,6 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                       <SelectItem value="all">All Types</SelectItem>
                       <SelectItem value="INVENTORY_QUANTITY">Inventory Qty</SelectItem>
                       <SelectItem value="INVENTORY_COST">Cost Sync</SelectItem>
-                      <SelectItem value="PRODUCTION_CONSUMPTION">Production</SelectItem>
                       <SelectItem value="ORDER_SYNC">Order Sync</SelectItem>
                       <SelectItem value="LISTING_UPDATE">Listing Update</SelectItem>
                     </SelectContent>
@@ -338,7 +310,6 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                       <SelectItem value="all">All Platforms</SelectItem>
                       <SelectItem value="KATANA">Katana</SelectItem>
                       <SelectItem value="REVERB">Reverb</SelectItem>
-                      <SelectItem value="SHOPIFY">Shopify</SelectItem>
                       <SelectItem value="SHOPFLOW">ShopFlow</SelectItem>
                     </SelectContent>
                   </Select>
@@ -357,89 +328,85 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
               </div>
             </CardHeader>
             <CardContent>
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Time</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Platform</TableHead>
-                      <TableHead>SKU</TableHead>
-                      <TableHead>Change</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="w-20">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredLogs.map((log, index) => (
-                      <motion.tr
-                        key={log.id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: index * 0.02 }}
-                        className={cn(
-                          "border-b transition-colors hover:bg-muted/50",
-                          log.status === "FAILED" && "bg-destructive/5"
-                        )}
-                      >
-                        <TableCell className="text-sm text-muted-foreground">
-                          {new Date(log.createdAt).toLocaleTimeString()}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className="text-xs">
-                            {formatSyncType(log.syncType)}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="font-medium">{log.platform}</TableCell>
-                        <TableCell>
-                          {log.sku ? (
-                            <div>
-                              <p className="font-mono text-xs">{log.sku}</p>
-                              <p className="text-xs text-muted-foreground">{log.itemName}</p>
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
+              {logs.length === 0 ? (
+                <EmptyState
+                  icon={FileText}
+                  title="No sync activity yet"
+                  description="Every inventory push, sale decrement and order poll is logged here. Run a sync from the Inventory Sync or Integrations page to generate entries."
+                />
+              ) : (
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Time</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Platform</TableHead>
+                        <TableHead>SKU</TableHead>
+                        <TableHead>Change</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="w-12">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredLogs.map((log, index) => (
+                        <motion.tr
+                          key={log.id}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: index * 0.02 }}
+                          className={cn(
+                            "border-b transition-colors hover:bg-muted/50",
+                            log.status === "FAILED" && "bg-destructive/5"
                           )}
-                        </TableCell>
-                        <TableCell>
-                          {log.previousValue && log.newValue ? (
-                            <span className="text-sm">
-                              {log.previousValue} → {log.newValue}
-                            </span>
-                          ) : log.newValue ? (
-                            <span className="text-sm">{log.newValue}</span>
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )}
-                        </TableCell>
-                        <TableCell>{getStatusBadge(log.status)}</TableCell>
-                        <TableCell>
-                          <div className="flex gap-1">
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
+                        >
+                          <TableCell className="text-sm text-muted-foreground">
+                            {new Date(log.createdAt).toLocaleString()}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-xs">
+                              {formatSyncType(log.syncType)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-medium">{log.platform}</TableCell>
+                          <TableCell>
+                            {log.sku ? (
+                              <div>
+                                <p className="font-mono text-xs">{log.sku}</p>
+                                <p className="text-xs text-muted-foreground">{log.itemName}</p>
+                              </div>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {log.previousValue && log.newValue ? (
+                              <span className="text-sm">
+                                {log.previousValue} - {log.newValue}
+                              </span>
+                            ) : log.newValue ? (
+                              <span className="text-sm">{log.newValue}</span>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>{getStatusBadge(log.status)}</TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               className="size-8"
                               onClick={() => setSelectedLog(log)}
                             >
                               <Eye className="size-3.5" />
                             </Button>
-                            {log.status === "FAILED" && (
-                              <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="size-8"
-                                onClick={() => handleRetry(log.id)}
-                              >
-                                <RotateCcw className="size-3.5" />
-                              </Button>
-                            )}
-                          </div>
-                        </TableCell>
-                      </motion.tr>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                          </TableCell>
+                        </motion.tr>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -448,9 +415,7 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
           <Card>
             <CardHeader>
               <CardTitle className="text-lg">Active Alerts</CardTitle>
-              <CardDescription>
-                Issues requiring attention or review
-              </CardDescription>
+              <CardDescription>Issues requiring attention or review</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {alertData.length === 0 ? (
@@ -460,7 +425,7 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                   <p className="text-sm text-muted-foreground">No active alerts</p>
                 </div>
               ) : (
-                alertData.map((alert, index) => (
+                alertData.map((alert: any, index: number) => (
                   <motion.div
                     key={alert.id}
                     initial={{ opacity: 0, y: 10 }}
@@ -468,10 +433,10 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                     transition={{ delay: index * 0.05 }}
                     className={cn(
                       "rounded-lg border p-4",
-                      alert.severity === "ERROR" && "border-destructive/30 bg-destructive/5",
+                      (alert.severity === "ERROR" || alert.severity === "CRITICAL") &&
+                        "border-destructive/30 bg-destructive/5",
                       alert.severity === "WARNING" && "border-warning/30 bg-warning/5",
-                      alert.severity === "INFO" && "border-primary/30 bg-primary/5",
-                      alert.isRead && "opacity-60"
+                      alert.severity === "INFO" && "border-primary/30 bg-primary/5"
                     )}
                   >
                     <div className="flex items-start justify-between">
@@ -480,7 +445,9 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                         <div>
                           <div className="flex items-center gap-2">
                             <p className="font-medium">{alert.title}</p>
-                            <Badge variant="outline" className="text-xs">{alert.type.replace("_", " ")}</Badge>
+                            <Badge variant="outline" className="text-xs">
+                              {String(alert.type).replace(/_/g, " ")}
+                            </Badge>
                           </div>
                           <p className="mt-1 text-sm text-muted-foreground">{alert.message}</p>
                           {alert.relatedSku && (
@@ -493,11 +460,12 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                           </p>
                         </div>
                       </div>
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         className="size-8"
                         onClick={() => handleDismissAlert(alert.id)}
+                        disabled={isDismissing}
                       >
                         <X className="size-4" />
                       </Button>
@@ -557,6 +525,12 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                   <p className="font-medium">{selectedLog.newValue}</p>
                 </div>
               )}
+              {selectedLog.details && (
+                <div>
+                  <p className="text-sm text-muted-foreground">Details</p>
+                  <p className="text-sm">{selectedLog.details}</p>
+                </div>
+              )}
               {selectedLog.errorMessage && (
                 <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3">
                   <p className="text-sm text-muted-foreground">Error Message</p>
@@ -565,14 +539,6 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
               )}
             </div>
           )}
-          <DialogFooter>
-            {selectedLog?.status === "FAILED" && (
-              <Button onClick={() => handleRetry(selectedLog.id)}>
-                <RotateCcw className="mr-2 size-4" />
-                Retry Sync
-              </Button>
-            )}
-          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -1,17 +1,17 @@
-import { fetchSKUMappings, fetchInventoryItems } from "@/lib/fetchers";
+import { fetchMappingData } from "@/lib/sku-mapping-actions";
 import { SKUMappingClient } from "./client";
 
 export default async function SKUMappingPage() {
-  const [mappingsResult, itemsResult] = await Promise.all([
-    fetchSKUMappings(),
-    fetchInventoryItems(),
-  ]);
+  const { data, error } = await fetchMappingData();
 
   return (
     <SKUMappingClient
-      skuMappings={mappingsResult.data}
-      inventoryItems={itemsResult.data}
-      error={mappingsResult.error || itemsResult.error}
+      mappings={data?.mappings ?? []}
+      unmappedKatana={data?.unmappedKatana ?? []}
+      unmappedReverb={data?.unmappedReverb ?? []}
+      katanaImported={data?.katanaImported ?? 0}
+      reverbImported={data?.reverbImported ?? 0}
+      error={error}
     />
   );
 }

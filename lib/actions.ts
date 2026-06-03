@@ -1,19 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { Prisma, UserRole, SlackNotificationEventType, TaskPriority } from "@prisma/client";
+import { Prisma, UserRole, TaskPriority } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { createId } from "@paralleldrive/cuid2";
 import prisma from "@/lib/prisma";
 import { authOptions } from "@/authOptions";
 import { getServerSession } from "next-auth";
-import {
-  notifyTaskCompleted,
-  checkAndNotifyUnblockedTasks,
-  notifyTaskUnblocked,
-} from "@/lib/slack-notifications";
 import { requirePermission } from "@/lib/permissions";
-import type { Permissions } from "@/config/permissions";
 
 // ============================================
 // UTILITY
@@ -208,72 +202,10 @@ export async function cloneCalculation(id: string) {
 }
 
 // ============================================
-// SLACK CHANNEL VERIFICATION
-// ============================================
-
-export async function verifySlackChannel(channelId: string): Promise<{
-  data: { valid: boolean; channelName?: string } | null;
-  error: string | null;
-}> {
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) return { data: null, error: "Not authenticated" };
-
-    const perm = await requirePermission(userId, "notifications", "update");
-    if (!perm.allowed) return { data: null, error: perm.error };
-
-    const slackToken = process.env.SLACK_BOT_TOKEN;
-    if (!slackToken) {
-      return { data: null, error: "Slack integration not configured" };
-    }
-
-    if (!/^[CDG][A-Z0-9]+$/i.test(channelId)) {
-      return {
-        data: { valid: false },
-        error: "Invalid channel ID format. Channel IDs typically start with C, D, or G followed by alphanumeric characters.",
-      };
-    }
-
-    console.log("[Slack] Verifying channel:", channelId);
-
-    const response = await fetch(
-      `https://slack.com/api/conversations.info?channel=${channelId}`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${slackToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    const result = await response.json();
-
-    if (!result.ok) {
-      if (result.error === "channel_not_found") {
-        return { data: { valid: false }, error: "Channel not found." };
-      }
-      if (result.error === "not_in_channel") {
-        return { data: { valid: false }, error: "Bot is not a member of this channel." };
-      }
-      return { data: { valid: false }, error: `Slack API error: ${result.error}` };
-    }
-
-    return {
-      data: { valid: true, channelName: result.channel?.name },
-      error: null,
-    };
-  } catch (error) {
-    console.error("Error verifying Slack channel:", error);
-    return { data: null, error: "Failed to verify Slack channel" };
-  }
-}
-
-// ============================================
 // USER ACTIONS
 // ============================================
 
-export async function createUser(data: { email: string; role: UserRole; roleId?: string }) {
+export async function createUser(data: { email: string; role?: UserRole }) {
   try {
     const currentUserId = await getCurrentUserId();
     if (!currentUserId) return { data: null, error: "Not authenticated" };
@@ -298,8 +230,7 @@ export async function createUser(data: { email: string; role: UserRole; roleId?:
       data: {
         email: data.email,
         password: hashedPassword,
-        role: data.role,
-        ...(data.roleId && { roleId: data.roleId }),
+        role: data.role ?? "ADMIN",
       },
       select: {
         id: true,
@@ -318,7 +249,7 @@ export async function createUser(data: { email: string; role: UserRole; roleId?:
   }
 }
 
-export async function updateUserRole(userId: string, role: UserRole, roleId?: string) {
+export async function updateUserRole(userId: string, role: UserRole) {
   try {
     const currentUserId = await getCurrentUserId();
     if (!currentUserId) return { data: null, error: "Not authenticated" };
@@ -336,7 +267,6 @@ export async function updateUserRole(userId: string, role: UserRole, roleId?: st
       where: { id: userId },
       data: {
         role,
-        ...(roleId !== undefined && { roleId }),
       },
       select: {
         id: true,
@@ -598,11 +528,6 @@ export async function updateTask(
     const perm = await requirePermission(userId, "tasks", "update");
     if (!perm.allowed) return { data: null, error: perm.error };
 
-    const existingTask = await prisma.task.findUnique({
-      where: { id },
-      select: { status: true, projectId: true },
-    });
-
     if (data.newAttachments && data.newAttachments.length > 0) {
       await prisma.attachment.createMany({
         data: data.newAttachments.map((att) => ({
@@ -640,11 +565,6 @@ export async function updateTask(
         attachments: { select: { id: true, name: true, url: true, type: true, size: true } },
       },
     });
-
-    if (data.status === "DONE" && existingTask?.status !== "DONE") {
-      notifyTaskCompleted(task.projectId, task.id, task.name, task.assignee?.email);
-      checkAndNotifyUnblockedTasks(id);
-    }
 
     revalidatePath("/dashboard/tasks");
     return { data: task, error: null };
@@ -979,127 +899,6 @@ export async function searchCommandPalette(query: string): Promise<{
 }
 
 // ============================================
-// NOTIFICATION SETTINGS
-// ============================================
-
-interface SlackNotificationConfigData {
-  id: string;
-  eventType: SlackNotificationEventType;
-  sendToPublic: boolean;
-  sendToInternal: boolean;
-  projectId: string;
-}
-
-interface ProjectNotificationSettings {
-  projectId: string;
-  projectName: string;
-  configs: SlackNotificationConfigData[];
-}
-
-export async function getProjectNotificationSettings(): Promise<{
-  data: ProjectNotificationSettings[] | null;
-  error: string | null;
-}> {
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) return { data: null, error: "Not authenticated" };
-
-    const perm = await requirePermission(userId, "notifications", "read");
-    if (!perm.allowed) return { data: null, error: perm.error };
-
-    console.log("[Notifications] Fetching project notification settings...");
-
-    const projects = await prisma.project.findMany({
-      orderBy: { name: "asc" },
-      include: {
-        slackNotificationConfigs: true,
-      },
-    });
-
-    const settings: ProjectNotificationSettings[] = projects.map((project) => ({
-      projectId: project.id,
-      projectName: project.name,
-      configs: project.slackNotificationConfigs,
-    }));
-
-    return { data: settings, error: null };
-  } catch (error) {
-    console.error("Error fetching notification settings:", error);
-    return { data: null, error: "Failed to fetch notification settings" };
-  }
-}
-
-export async function updateNotificationConfig(
-  projectId: string,
-  eventType: SlackNotificationEventType,
-  sendToPublic: boolean,
-  sendToInternal: boolean
-): Promise<{ data: SlackNotificationConfigData | null; error: string | null }> {
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) return { data: null, error: "Not authenticated" };
-
-    const perm = await requirePermission(userId, "notifications", "update");
-    if (!perm.allowed) return { data: null, error: perm.error };
-
-    const project = await prisma.project.findUnique({
-      where: { id: projectId },
-    });
-
-    if (!project) {
-      return { data: null, error: "Project not found" };
-    }
-
-    console.log("[Notifications] Updating config for project:", projectId, "event:", eventType);
-
-    const config = await prisma.slackNotificationConfig.upsert({
-      where: {
-        projectId_eventType: { projectId, eventType },
-      },
-      update: { sendToPublic, sendToInternal },
-      create: { projectId, eventType, sendToPublic, sendToInternal },
-    });
-
-    revalidatePath("/dashboard/notifications");
-    return { data: config, error: null };
-  } catch (error) {
-    console.error("Error updating notification config:", error);
-    return { data: null, error: "Failed to update notification config" };
-  }
-}
-
-export async function testNotification(
-  projectId: string,
-  eventType: SlackNotificationEventType
-): Promise<{ data: { sent: boolean; message: string } | null; error: string | null }> {
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) return { data: null, error: "Not authenticated" };
-
-    const perm = await requirePermission(userId, "notifications", "update");
-    if (!perm.allowed) return { data: null, error: perm.error };
-
-    console.log("[Notifications] Sending test notification for project:", projectId);
-
-    switch (eventType) {
-      case "TASK_COMPLETED":
-        await notifyTaskCompleted(projectId, "test", "[Test] Example Task", "test@example.com");
-        break;
-      case "TASK_UNBLOCKED":
-        await notifyTaskUnblocked(projectId, "test", "[Test] Example Task");
-        break;
-      default:
-        return { data: null, error: "Unknown event type" };
-    }
-
-    return { data: { sent: true, message: `Sent test ${eventType} notification` }, error: null };
-  } catch (error) {
-    console.error("Error testing notification:", error);
-    return { data: null, error: "Failed to send test notification" };
-  }
-}
-
-// ============================================
 // RECURRING TASK ACTIONS
 // ============================================
 
@@ -1295,150 +1094,3 @@ export async function toggleRecurringTaskActive(id: string): Promise<{
   }
 }
 
-// ============================================
-// ROLE ACTIONS (RBAC)
-// ============================================
-
-export async function getRoles() {
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) return { data: null, error: "Not authenticated" };
-
-    const roles = await prisma.role.findMany({
-      orderBy: [{ isSystem: "desc" }, { name: "asc" }],
-      include: { _count: { select: { users: true } } },
-    });
-
-    return { data: roles, error: null };
-  } catch (error) {
-    console.error("Error fetching roles:", error);
-    return { data: null, error: "Failed to fetch roles" };
-  }
-}
-
-export async function createRole(data: {
-  name: string;
-  description?: string;
-  permissions: Permissions;
-}) {
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) return { data: null, error: "Not authenticated" };
-
-    const perm = await requirePermission(userId, "users", "create");
-    if (!perm.allowed) return { data: null, error: perm.error };
-
-    console.log("[RBAC] Creating role:", data.name);
-
-    const existing = await prisma.role.findUnique({ where: { name: data.name } });
-    if (existing) return { data: null, error: "A role with this name already exists" };
-
-    const role = await prisma.role.create({
-      data: {
-        name: data.name,
-        description: data.description,
-        permissions: data.permissions as any,
-      },
-    });
-
-    revalidatePath("/dashboard/roles");
-    return { data: role, error: null };
-  } catch (error) {
-    console.error("Error creating role:", error);
-    return { data: null, error: "Failed to create role" };
-  }
-}
-
-export async function updateRole(
-  id: string,
-  data: { name?: string; description?: string; permissions?: Permissions }
-) {
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) return { data: null, error: "Not authenticated" };
-
-    const perm = await requirePermission(userId, "users", "update");
-    if (!perm.allowed) return { data: null, error: perm.error };
-
-    console.log("[RBAC] Updating role:", id);
-
-    const existing = await prisma.role.findUnique({ where: { id } });
-    if (!existing) return { data: null, error: "Role not found" };
-
-    const role = await prisma.role.update({
-      where: { id },
-      data: {
-        ...(data.name !== undefined && { name: data.name }),
-        ...(data.description !== undefined && { description: data.description }),
-        ...(data.permissions !== undefined && { permissions: data.permissions as any }),
-      },
-    });
-
-    revalidatePath("/dashboard/roles");
-    revalidatePath("/dashboard/users");
-    return { data: role, error: null };
-  } catch (error) {
-    console.error("Error updating role:", error);
-    return { data: null, error: "Failed to update role" };
-  }
-}
-
-export async function deleteRole(id: string) {
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) return { data: null, error: "Not authenticated" };
-
-    const perm = await requirePermission(userId, "users", "delete");
-    if (!perm.allowed) return { data: null, error: perm.error };
-
-    const existing = await prisma.role.findUnique({ where: { id } });
-    if (!existing) return { data: null, error: "Role not found" };
-    if (existing.isSystem) return { data: null, error: "System roles cannot be deleted" };
-
-    const usersWithRole = await prisma.user.count({ where: { roleId: id } });
-    if (usersWithRole > 0) {
-      return { data: null, error: "Cannot delete role that is assigned to users. Reassign users first." };
-    }
-
-    await prisma.role.delete({ where: { id } });
-
-    revalidatePath("/dashboard/roles");
-    return { data: true, error: null };
-  } catch (error) {
-    console.error("Error deleting role:", error);
-    return { data: null, error: "Failed to delete role" };
-  }
-}
-
-export async function setUserPermissionOverride(
-  targetUserId: string,
-  permissions: Permissions | null
-) {
-  try {
-    const userId = await getCurrentUserId();
-    if (!userId) return { data: null, error: "Not authenticated" };
-
-    const perm = await requirePermission(userId, "users", "update");
-    if (!perm.allowed) return { data: null, error: perm.error };
-
-    console.log("[RBAC] Setting permission override for user:", targetUserId);
-
-    if (permissions === null) {
-      await prisma.userPermissionOverride.deleteMany({
-        where: { userId: targetUserId },
-      });
-    } else {
-      await prisma.userPermissionOverride.upsert({
-        where: { userId: targetUserId },
-        update: { permissions: permissions as any },
-        create: { userId: targetUserId, permissions: permissions as any },
-      });
-    }
-
-    revalidatePath("/dashboard/users");
-    return { data: true, error: null };
-  } catch (error) {
-    console.error("Error setting permission override:", error);
-    return { data: null, error: "Failed to set permission override" };
-  }
-}

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Plus, MoreHorizontal, Trash2, Key, Shield, Users as UsersIcon, Building2, LogIn } from "lucide-react";
+import { Plus, MoreHorizontal, Trash2, Key, Shield, Users as UsersIcon, LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,13 +15,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -30,19 +23,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { UserModal } from "@/components/modals/user-modal";
-import { deleteUser, updateUserRole, resetUserPassword, getImpersonationPassword, addProjectMember } from "@/lib/actions";
+import { deleteUser, resetUserPassword, getImpersonationPassword } from "@/lib/actions";
 import { UserRole } from "@prisma/client";
 
 interface Project {
   id: string;
   name: string;
-}
-
-interface RoleData {
-  id: string;
-  name: string;
-  description: string | null;
-  isSystem: boolean;
 }
 
 interface UserData {
@@ -60,10 +46,9 @@ interface UsersClientProps {
   users: UserData[];
   currentUserId: string;
   projects: Project[];
-  roles: RoleData[];
 }
 
-export function UsersClient({ users: initialUsers, currentUserId, projects, roles }: UsersClientProps) {
+export function UsersClient({ users: initialUsers, currentUserId }: UsersClientProps) {
   const [users, setUsers] = useState(initialUsers);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
@@ -73,11 +58,6 @@ export function UsersClient({ users: initialUsers, currentUserId, projects, role
     email: string;
   }>({ isOpen: false, password: "", email: "" });
   const [copied, setCopied] = useState(false);
-  const [projectLinkDialog, setProjectLinkDialog] = useState<{
-    isOpen: boolean;
-    userId: string;
-    selectedProjectId: string;
-  }>({ isOpen: false, userId: "", selectedProjectId: "" });
   const router = useRouter();
 
   const handleCreateUser = () => {
@@ -107,78 +87,6 @@ export function UsersClient({ users: initialUsers, currentUserId, projects, role
       console.error("Error deleting user:", error);
     } finally {
       setIsDeleting(null);
-    }
-  };
-
-  const handleRoleChange = async (userId: string, roleId: string) => {
-    if (userId === currentUserId) {
-      alert("You cannot change your own role");
-      return;
-    }
-
-    const selectedRole = roles.find((r) => r.id === roleId);
-    if (!selectedRole) return;
-
-    const legacyRole = selectedRole.name.toUpperCase() as UserRole;
-    const validLegacy = ["ADMIN", "MEMBER", "VIEWER"].includes(legacyRole) ? legacyRole : "VIEWER" as UserRole;
-
-    if (selectedRole.name === "Viewer") {
-      if (projects.length === 0) {
-        alert("No projects available. Create a project first.");
-        return;
-      }
-      setProjectLinkDialog({
-        isOpen: true,
-        userId,
-        selectedProjectId: projects[0]?.id || "",
-      });
-      return;
-    }
-
-    try {
-      const result = await updateUserRole(userId, validLegacy, roleId);
-      if (result.error) {
-        alert(result.error);
-        return;
-      }
-
-      if (result.data) {
-        setUsers(users.map((u) => (u.id === userId ? { ...u, ...result.data } : u)));
-      }
-    } catch (error) {
-      console.error("Error updating user role:", error);
-    }
-  };
-
-  const handleProjectLinkConfirm = async () => {
-    const { userId, selectedProjectId } = projectLinkDialog;
-    
-    if (!selectedProjectId) {
-      alert("Please select a project");
-      return;
-    }
-
-    const viewerRole = roles.find((r) => r.name === "Viewer");
-
-    try {
-      const roleResult = await updateUserRole(userId, "VIEWER", viewerRole?.id);
-      if (roleResult.error) {
-        alert(roleResult.error);
-        return;
-      }
-
-      const memberResult = await addProjectMember(selectedProjectId, userId);
-      if (memberResult.error) {
-        alert(memberResult.error);
-        return;
-      }
-
-      if (roleResult.data) {
-        setUsers(users.map((u) => (u.id === userId ? { ...u, ...roleResult.data } : u)));
-      }
-      setProjectLinkDialog({ isOpen: false, userId: "", selectedProjectId: "" });
-    } catch (error) {
-      console.error("Error updating user role:", error);
     }
   };
 
@@ -250,7 +158,7 @@ export function UsersClient({ users: initialUsers, currentUserId, projects, role
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-secondary-900">Users</h1>
-          <p className="text-secondary-600">Manage users and their roles</p>
+          <p className="text-secondary-600">Manage users. Every user has full admin access.</p>
         </div>
         <Button onClick={handleCreateUser} size="sm" className="sm:size-default">
           <Plus className="mr-2 size-4" />
@@ -305,26 +213,7 @@ export function UsersClient({ users: initialUsers, currentUserId, projects, role
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-6 py-4">
-                      {user.id === currentUserId ? (
-                        <Badge variant="outline">{user.role}</Badge>
-                      ) : (
-                        <Select
-                          value={roles.find((r) => r.name.toUpperCase() === user.role)?.id || ""}
-                          onValueChange={(value) => handleRoleChange(user.id, value)}
-                        >
-                          <SelectTrigger className="w-40">
-                            <SelectValue placeholder="Select role" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {roles.map((role) => (
-                              <SelectItem key={role.id} value={role.id}>
-                                {role.name}
-                                {role.isSystem ? "" : " (Custom)"}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
+                      <Badge variant="outline">{user.role}</Badge>
                     </td>
                     <td className="whitespace-nowrap px-6 py-4 text-sm text-secondary-500">
                       {new Date(user.createdAt).toLocaleDateString()}
@@ -338,17 +227,13 @@ export function UsersClient({ users: initialUsers, currentUserId, projects, role
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            {user.role !== "ADMIN" && (
-                              <>
-                                <DropdownMenuItem
-                                  onClick={() => handleSignInAs(user.email)}
-                                >
-                                  <LogIn className="mr-2 size-4" />
-                                  Sign in as
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                              </>
-                            )}
+                            <DropdownMenuItem
+                              onClick={() => handleSignInAs(user.email)}
+                            >
+                              <LogIn className="mr-2 size-4" />
+                              Sign in as
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => handleResetPassword(user.id, user.email)}
                             >
@@ -380,8 +265,6 @@ export function UsersClient({ users: initialUsers, currentUserId, projects, role
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSuccess={handleModalSuccess}
-        projects={projects}
-        roles={roles}
       />
 
       {/* Password Dialog */}
@@ -425,52 +308,6 @@ export function UsersClient({ users: initialUsers, currentUserId, projects, role
           <DialogFooter>
             <Button onClick={() => setPasswordDialog({ ...passwordDialog, isOpen: false })}>
               Done
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Project Link Dialog */}
-      <Dialog 
-        open={projectLinkDialog.isOpen} 
-        onOpenChange={(open) => !open && setProjectLinkDialog({ isOpen: false, userId: "", selectedProjectId: "" })}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Building2 className="size-5 text-primary-500" />
-              Link to Project
-            </DialogTitle>
-            <DialogDescription>
-              Select a project to link this user to.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <Select
-              value={projectLinkDialog.selectedProjectId}
-              onValueChange={(value) => setProjectLinkDialog({ ...projectLinkDialog, selectedProjectId: value })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select project" />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((project) => (
-                  <SelectItem key={project.id} value={project.id}>
-                    {project.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <DialogFooter>
-            <Button onClick={handleProjectLinkConfirm}>
-              Confirm
-            </Button>
-            <Button 
-              variant="outline" 
-              onClick={() => setProjectLinkDialog({ isOpen: false, userId: "", selectedProjectId: "" })}
-            >
-              Cancel
             </Button>
           </DialogFooter>
         </DialogContent>

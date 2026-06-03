@@ -8,18 +8,12 @@ import {
   Users,
   X,
   UserCircle,
-  Bell,
-  Shield,
   LayoutDashboard,
-  Package,
   RefreshCw,
-  Factory,
   Link2,
   DollarSign,
   Settings,
   FileText,
-  ShoppingCart,
-  Truck,
   Music,
 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
@@ -62,23 +56,9 @@ const allNavigationSections: NavSection[] = [
   {
     title: "Inventory",
     items: [
-      { href: "/dashboard/inventory-sync", label: "Inventory Sync", icon: RefreshCw, pageKey: "inventorySync" },
-      { href: "/dashboard/reverb-sync", label: "Reverb Sync", icon: Package, pageKey: "reverbSync" },
       { href: "/dashboard/sku-mapping", label: "SKU Mapping", icon: Link2, pageKey: "skuMapping" },
+      { href: "/dashboard/inventory-sync", label: "Inventory Sync", icon: RefreshCw, pageKey: "inventorySync" },
       { href: "/dashboard/cost-sync", label: "Cost Sync", icon: DollarSign, pageKey: "costSync" },
-    ],
-  },
-  {
-    title: "Production",
-    items: [
-      { href: "/dashboard/production", label: "Production", icon: Factory, pageKey: "production" },
-    ],
-  },
-  {
-    title: "Sales & Shipping",
-    items: [
-      { href: "/dashboard/sales-inventory", label: "Sales Inventory", icon: ShoppingCart, pageKey: "salesInventory" },
-      { href: "/dashboard/shipping", label: "Shipping", icon: Truck, pageKey: "shipping" },
     ],
   },
   {
@@ -92,8 +72,6 @@ const allNavigationSections: NavSection[] = [
     title: "Admin",
     items: [
       { href: "/dashboard/users", label: "Users", icon: Users, pageKey: "users" },
-      { href: "/dashboard/roles", label: "Roles", icon: Shield, pageKey: "roles" },
-      { href: "/dashboard/notifications", label: "Notifications", icon: Bell, pageKey: "notifications" },
     ],
   },
 ];

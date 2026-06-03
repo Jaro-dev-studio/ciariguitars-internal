@@ -18,54 +18,23 @@ model User {
   password  String
   firstName String?
   lastName  String?
-  role      UserRole @default(VIEWER)
-
-  roleId String?
-  customRole Role? @relation(fields: [roleId], references: [id])
-
-  permissionOverride UserPermissionOverride?
+  role      UserRole @default(ADMIN)
 
   projects               ProjectMember[]
   calculations           Calculation[]
   assignedTasks          Task[]           @relation("TaskAssignee")
   createdTasks           Task[]           @relation("TaskCreatedBy")
   taskViews              TaskView[]       @relation("TaskViews")
-  aiChats                AIChat[]
   assignedRecurringTasks RecurringTask[]  @relation("RecurringTaskAssignee")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
-  @@index([roleId])
 }
 
 enum UserRole {
   ADMIN
   MEMBER
   VIEWER
-}
-
-model Role {
-  id          String  @id @default(cuid())
-  name        String  @unique
-  description String?
-  isSystem    Boolean @default(false)
-  permissions Json
-
-  users User[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model UserPermissionOverride {
-  id          String @id @default(cuid())
-  userId      String @unique
-  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  permissions Json
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 }
 
 // ============================================
@@ -81,7 +50,6 @@ model Project {
   members                  ProjectMember[]
   tasks                    Task[]
   recurringTasks           RecurringTask[]
-  slackNotificationConfigs SlackNotificationConfig[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -237,32 +205,6 @@ model RecurringTask {
 }
 
 // ============================================
-// SLACK NOTIFICATIONS
-// ============================================
-
-model SlackNotificationConfig {
-  id String @id @default(cuid())
-
-  eventType      SlackNotificationEventType
-  sendToPublic   Boolean @default(false)
-  sendToInternal Boolean @default(false)
-
-  projectId String
-  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([projectId, eventType])
-  @@index([projectId])
-}
-
-enum SlackNotificationEventType {
-  TASK_COMPLETED
-  TASK_UNBLOCKED
-}
-
-// ============================================
 // CALCULATIONS
 // ============================================
 
@@ -275,41 +217,6 @@ model Calculation {
   userId      String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-}
-
-// ============================================
-// AI CHAT
-// ============================================
-
-model AIChat {
-  id    String @id @default(cuid())
-  title String @default("New Chat")
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  messages AIChatMessage[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([userId])
-  @@index([updatedAt])
-}
-
-model AIChatMessage {
-  id      String @id @default(cuid())
-  role    String
-  content String @db.Text
-
-  toolCalls Json?
-
-  chatId String
-  chat   AIChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-
-  @@index([chatId])
 }
 
 // ============================================
@@ -668,4 +575,59 @@ model SyncConfiguration {
   updatedAt DateTime @updatedAt
 
   @@unique([syncType])
+}
+
+// ============================================
+// PROCESSED REVERB ORDERS (idempotency guard)
+// ============================================
+
+model ProcessedReverbOrder {
+  id String @id @default(cuid())
+
+  orderNumber   String   @unique
+  source        String   @default("webhook")
+  status        String?
+  decrementApplied Boolean @default(false)
+  katanaReference  String?
+
+  payload       Json?
+  processedAt   DateTime @default(now())
+
+  @@index([processedAt])
+}
+
+// ============================================
+// CATALOG STAGING (imported for SKU matching)
+// ============================================
+
+model KatanaCatalogVariant {
+  id String @id @default(cuid())
+
+  variantId    String  @unique
+  productId    String?
+  productName  String
+  variantName  String?
+  sku          String?
+  isSellable   Boolean @default(true)
+
+  lastImportedAt DateTime @default(now())
+
+  @@index([sku])
+}
+
+model ReverbCatalogListing {
+  id String @id @default(cuid())
+
+  listingId    String  @unique
+  title        String
+  make         String?
+  model        String?
+  finish       String?
+  state        String?
+  inventory    Int?
+  sku          String?
+
+  lastImportedAt DateTime @default(now())
+
+  @@index([state])
 }

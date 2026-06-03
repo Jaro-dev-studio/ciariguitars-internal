@@ -321,37 +321,8 @@ export async function getRecurringTask(id: string) {
 }
 
 // ============================================
-// ROLES & PERMISSIONS
+// PERMISSIONS
 // ============================================
-
-export async function getRoles() {
-  try {
-    const roles = await prisma.role.findMany({
-      orderBy: [{ isSystem: "desc" }, { name: "asc" }],
-      include: { _count: { select: { users: true } } },
-    });
-
-    return { data: roles, error: null };
-  } catch (error) {
-    console.error("Error fetching roles:", error);
-    return { data: null, error: "Failed to fetch roles" };
-  }
-}
-
-export async function getRole(id: string) {
-  try {
-    const role = await prisma.role.findUnique({
-      where: { id },
-      include: { _count: { select: { users: true } } },
-    });
-
-    if (!role) return { data: null, error: "Role not found" };
-    return { data: role, error: null };
-  } catch (error) {
-    console.error("Error fetching role:", error);
-    return { data: null, error: "Failed to fetch role" };
-  }
-}
 
 export async function fetchUserPermissions(userId: string): Promise<{
   data: Permissions | null;
@@ -444,10 +415,10 @@ export async function fetchDashboardData() {
     const data = {
       integrationStatus,
       metrics: {
-        totalSkus: inventoryItems.length || 847,
-        syncedToday: syncedToday || 234,
-        pendingSync: pendingCount || 12,
-        errorCount: errorCount || 3,
+        totalSkus: inventoryItems.length,
+        syncedToday,
+        pendingSync: pendingCount,
+        errorCount,
       },
       recentSyncs: recentSyncs.map(s => ({
         id: s.id,
@@ -466,15 +437,15 @@ export async function fetchDashboardData() {
         createdAt: formatTimeAgo(a.createdAt),
       })),
       inventoryOverview: {
-        finishedGoods: finishedGoods || 156,
-        rawMaterials: rawMaterials || 423,
-        lowStock: lowStock || 18,
-        readyToShip: readyToShip || 89,
+        finishedGoods,
+        rawMaterials,
+        lowStock,
+        readyToShip,
       },
       productionStats: {
-        activeOrders: activeOrders || 12,
-        completedToday: completedToday || 4,
-        onHold: onHold || 2,
+        activeOrders,
+        completedToday,
+        onHold,
       },
     };
 

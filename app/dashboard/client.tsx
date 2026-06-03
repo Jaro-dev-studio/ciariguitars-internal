@@ -1,11 +1,10 @@
 "use client";
 
-import { useState } from "react";
 import { motion } from "framer-motion";
 import {
   RefreshCw,
   Package,
-  Factory,
+  DollarSign,
   AlertTriangle,
   CheckCircle2,
   XCircle,
@@ -15,12 +14,14 @@ import {
   ArrowRight,
   Activity,
   Zap,
+  Info,
 } from "lucide-react";
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { PageIntro } from "@/components/page-intro";
 
 interface DashboardData {
   integrationStatus: {
@@ -68,44 +69,13 @@ interface DashboardClientProps {
   error: string | null;
 }
 
-const mockData: DashboardData = {
-  integrationStatus: [
-    { platform: "Katana", status: "connected", lastSync: "2 mins ago" },
-    { platform: "Reverb", status: "connected", lastSync: "5 mins ago" },
-    { platform: "Shopify", status: "connected", lastSync: "3 mins ago" },
-    { platform: "ShipStation", status: "connected", lastSync: "10 mins ago" },
-    { platform: "ManageMarkets", status: "disconnected", lastSync: null },
-    { platform: "ShopFlow", status: "connected", lastSync: "1 min ago" },
-  ],
-  metrics: {
-    totalSkus: 847,
-    syncedToday: 234,
-    pendingSync: 12,
-    errorCount: 3,
-  },
-  recentSyncs: [
-    { id: "1", type: "Inventory Quantity", platform: "Katana", status: "SUCCESS", createdAt: "2 mins ago", itemCount: 45 },
-    { id: "2", type: "Listing Update", platform: "Reverb", status: "SUCCESS", createdAt: "5 mins ago", itemCount: 12 },
-    { id: "3", type: "Cost Sync", platform: "ShopFlow", status: "PARTIAL", createdAt: "8 mins ago", itemCount: 28 },
-    { id: "4", type: "Production Consumption", platform: "Katana", status: "SUCCESS", createdAt: "15 mins ago", itemCount: 8 },
-    { id: "5", type: "Inventory Quantity", platform: "Shopify", status: "FAILED", createdAt: "22 mins ago", itemCount: 0 },
-  ],
-  alerts: [
-    { id: "1", type: "QUANTITY_MISMATCH", severity: "WARNING", title: "Quantity Mismatch", message: "SKU CG-TELE-001 shows different quantities across platforms", createdAt: "10 mins ago" },
-    { id: "2", type: "LOW_STOCK", severity: "WARNING", title: "Low Stock Alert", message: "Nitrocellulose Lacquer (RAW-NCL-001) is below reorder point", createdAt: "1 hour ago" },
-    { id: "3", type: "SYNC_FAILURE", severity: "ERROR", title: "Sync Failed", message: "Shopify inventory sync failed - API rate limit exceeded", createdAt: "22 mins ago" },
-  ],
-  inventoryOverview: {
-    finishedGoods: 156,
-    rawMaterials: 423,
-    lowStock: 18,
-    readyToShip: 89,
-  },
-  productionStats: {
-    activeOrders: 12,
-    completedToday: 4,
-    onHold: 2,
-  },
+const emptyData: DashboardData = {
+  integrationStatus: [],
+  metrics: { totalSkus: 0, syncedToday: 0, pendingSync: 0, errorCount: 0 },
+  recentSyncs: [],
+  alerts: [],
+  inventoryOverview: { finishedGoods: 0, rawMaterials: 0, lowStock: 0, readyToShip: 0 },
+  productionStats: { activeOrders: 0, completedToday: 0, onHold: 0 },
 };
 
 function MetricCard({
@@ -202,7 +172,16 @@ function IntegrationStatusCard({ integrations }: { integrations: DashboardData["
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {integrations.map((integration) => (
+        {integrations.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <Clock className="mb-2 size-8 text-muted-foreground" />
+            <p className="text-sm font-medium">No connections yet</p>
+            <p className="text-xs text-muted-foreground">
+              Connection status appears once you test or run a sync on the Integrations page.
+            </p>
+          </div>
+        ) : (
+          integrations.map((integration) => (
           <motion.div
             key={integration.platform}
             initial={{ opacity: 0, y: 10 }}
@@ -220,7 +199,8 @@ function IntegrationStatusCard({ integrations }: { integrations: DashboardData["
             </div>
             {getStatusBadge(integration.status)}
           </motion.div>
-        ))}
+          ))
+        )}
       </CardContent>
     </Card>
   );
@@ -253,7 +233,16 @@ function RecentSyncsCard({ syncs }: { syncs: DashboardData["recentSyncs"] }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
-        {syncs.map((sync, index) => (
+        {syncs.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center">
+            <RefreshCw className="mb-2 size-8 text-muted-foreground" />
+            <p className="text-sm font-medium">No syncs yet</p>
+            <p className="text-xs text-muted-foreground">
+              Sync activity will appear here after the first Katana to Reverb sync runs.
+            </p>
+          </div>
+        ) : (
+          syncs.map((sync, index) => (
           <motion.div
             key={sync.id}
             initial={{ opacity: 0, x: -10 }}
@@ -274,7 +263,8 @@ function RecentSyncsCard({ syncs }: { syncs: DashboardData["recentSyncs"] }) {
             </div>
             {getStatusBadge(sync.status)}
           </motion.div>
-        ))}
+          ))
+        )}
       </CardContent>
     </Card>
   );
@@ -357,48 +347,24 @@ function AlertsCard({ alerts }: { alerts: DashboardData["alerts"] }) {
   );
 }
 
-function QuickActionsCard() {
-  const actions = [
-    { label: "Run Full Sync", icon: RefreshCw, href: "/dashboard/inventory-sync" },
-    { label: "View Inventory", icon: Package, href: "/dashboard/sales-inventory" },
-    { label: "Production Orders", icon: Factory, href: "/dashboard/production" },
-    { label: "Manage SKUs", icon: Zap, href: "/dashboard/sku-mapping" },
-  ];
-
-  return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base font-semibold">Quick Actions</CardTitle>
-        <CardDescription>Frequently used operations</CardDescription>
-      </CardHeader>
-      <CardContent className="grid grid-cols-2 gap-3">
-        {actions.map((action) => (
-          <Link key={action.label} href={action.href}>
-            <Button
-              variant="outline"
-              className="h-auto w-full flex-col gap-2 py-4 hover:bg-primary/5 hover:border-primary/30"
-            >
-              <action.icon className="size-5 text-primary" />
-              <span className="text-xs">{action.label}</span>
-            </Button>
-          </Link>
-        ))}
-      </CardContent>
-    </Card>
-  );
-}
-
 export function DashboardClient({ initialData, error }: DashboardClientProps) {
-  const data = initialData || mockData;
+  const data = initialData ?? emptyData;
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-2">
         <h1 className="text-2xl font-bold tracking-tight">Operations Dashboard</h1>
         <p className="text-muted-foreground">
-          Monitor inventory sync, production status, and integration health across all platforms.
+          Monitor inventory sync and integration health across all platforms.
         </p>
       </div>
+
+      <PageIntro icon={Info}>
+        This is your at-a-glance health check. It summarizes how many SKUs are mapped, what synced
+        recently, whether Katana, Reverb and Shop Flow are connected, and surfaces any active
+        alerts. Use the quick actions to jump straight into mapping, syncing, or the integration
+        controls.
+      </PageIntro>
 
       {error && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4">
@@ -410,31 +376,26 @@ export function DashboardClient({ initialData, error }: DashboardClientProps) {
         <MetricCard
           title="Total SKUs"
           value={data.metrics.totalSkus.toLocaleString()}
-          change="+12 this week"
-          changeType="up"
           icon={Package}
           href="/dashboard/sku-mapping"
         />
         <MetricCard
           title="Synced Today"
           value={data.metrics.syncedToday}
-          change="+15% vs yesterday"
-          changeType="up"
           icon={RefreshCw}
           href="/dashboard/sync-logs"
         />
         <MetricCard
           title="Pending Sync"
           value={data.metrics.pendingSync}
-          changeType="neutral"
           icon={Clock}
           href="/dashboard/inventory-sync"
         />
         <MetricCard
           title="Errors"
           value={data.metrics.errorCount}
-          change="3 need attention"
-          changeType="down"
+          change={data.metrics.errorCount > 0 ? "Need attention" : undefined}
+          changeType={data.metrics.errorCount > 0 ? "down" : undefined}
           icon={AlertTriangle}
           href="/dashboard/sync-logs"
         />
@@ -445,25 +406,25 @@ export function DashboardClient({ initialData, error }: DashboardClientProps) {
           title="Finished Goods"
           value={data.inventoryOverview.finishedGoods}
           icon={Package}
-          href="/dashboard/sales-inventory"
+          href="/dashboard/inventory-sync"
         />
         <MetricCard
           title="Ready to Ship"
           value={data.inventoryOverview.readyToShip}
           icon={CheckCircle2}
-          href="/dashboard/sales-inventory"
+          href="/dashboard/inventory-sync"
         />
         <MetricCard
-          title="Active Production"
-          value={data.productionStats.activeOrders}
-          icon={Factory}
-          href="/dashboard/production"
+          title="Raw Materials"
+          value={data.inventoryOverview.rawMaterials}
+          icon={Package}
+          href="/dashboard/inventory-sync"
         />
         <MetricCard
           title="Low Stock Items"
           value={data.inventoryOverview.lowStock}
-          change="Action needed"
-          changeType="down"
+          change={data.inventoryOverview.lowStock > 0 ? "Action needed" : undefined}
+          changeType={data.inventoryOverview.lowStock > 0 ? "down" : undefined}
           icon={AlertTriangle}
           href="/dashboard/inventory-sync"
         />
@@ -478,14 +439,7 @@ export function DashboardClient({ initialData, error }: DashboardClientProps) {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <AlertsCard alerts={data.alerts} />
-        </div>
-        <div className="lg:col-span-1">
-          <QuickActionsCard />
-        </div>
-      </div>
+      <AlertsCard alerts={data.alerts} />
     </div>
   );
 }

@@ -5,7 +5,6 @@ import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/authOptions";
 import { CommandPalette } from "@/components/command-palette";
-import { GlobalAIChatButton } from "@/components/ai/GlobalAIChatButton";
 import { getUserPermissions } from "@/lib/permissions";
 
 export default async function DashboardLayout({
@@ -34,7 +33,6 @@ export default async function DashboardLayout({
       <div className="bg-grid-pattern pointer-events-none fixed inset-0 opacity-[0.01]" />
 
       <CommandPalette permissions={permissions} />
-      <GlobalAIChatButton />
 
       <div className="relative z-10 flex min-h-screen">
         <Suspense fallback={<SidebarSkeleton />}>

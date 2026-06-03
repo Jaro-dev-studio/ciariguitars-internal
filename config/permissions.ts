@@ -1,26 +1,22 @@
 export const PERMISSION_RESOURCES = [
-  { key: "projects", label: "Projects" },
-  { key: "tasks", label: "Tasks" },
-  { key: "recurringTasks", label: "Recurring Tasks" },
-  { key: "calculations", label: "Calculations" },
+  { key: "inventory", label: "Inventory" },
+  { key: "skuMappings", label: "SKU Mappings" },
+  { key: "integrations", label: "Integrations" },
   { key: "users", label: "Users" },
-  { key: "notifications", label: "Notifications" },
 ] as const;
 
 export const PERMISSION_PAGES = [
-  { key: "projects", label: "Projects", path: "/dashboard/projects" },
-  { key: "tasks", label: "Tasks", path: "/dashboard/tasks" },
-  { key: "recurringTasks", label: "Recurring Tasks", path: "/dashboard/recurring-tasks" },
-  { key: "calculations", label: "Calculations", path: "/dashboard/calculation" },
+  { key: "dashboard", label: "Dashboard", path: "/dashboard" },
+  { key: "skuMapping", label: "SKU Mapping", path: "/dashboard/sku-mapping" },
+  { key: "inventorySync", label: "Inventory Sync", path: "/dashboard/inventory-sync" },
+  { key: "costSync", label: "Cost Sync", path: "/dashboard/cost-sync" },
+  { key: "integrations", label: "Integrations", path: "/dashboard/integrations" },
+  { key: "syncLogs", label: "Sync Logs", path: "/dashboard/sync-logs" },
   { key: "users", label: "Users", path: "/dashboard/users" },
-  { key: "notifications", label: "Notifications", path: "/dashboard/notifications" },
-  { key: "roles", label: "Roles", path: "/dashboard/roles" },
   { key: "profile", label: "Profile", path: "/dashboard/profile" },
 ] as const;
 
-export const PERMISSION_FEATURES = [
-  { key: "aiChat", label: "AI Chat" },
-] as const;
+export const PERMISSION_FEATURES: ReadonlyArray<{ key: string; label: string }> = [];
 
 export const CRUD_ACTIONS = ["create", "read", "update", "delete"] as const;
 

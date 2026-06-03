@@ -1,9 +1,8 @@
 import { authOptions } from "@/authOptions";
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
-import { getUsers, getProjects, getRoles } from "@/lib/fetchers";
+import { getUsers, getProjects } from "@/lib/fetchers";
 import prisma from "@/lib/prisma";
-import { getUserPermissions, hasPageAccess } from "@/lib/permissions";
 import { UsersClient } from "./client";
 
 export default async function UsersPage() {
@@ -19,15 +18,9 @@ export default async function UsersPage() {
 
   if (!currentUser) redirect("/");
 
-  const permissions = await getUserPermissions(currentUser.id);
-  if (!hasPageAccess(permissions, "users")) {
-    redirect("/dashboard");
-  }
-
-  const [usersResult, projectsResult, rolesResult] = await Promise.all([
+  const [usersResult, projectsResult] = await Promise.all([
     getUsers(),
     getProjects(),
-    getRoles(),
   ]);
 
   const projects = (projectsResult.data || []).map((c) => ({
@@ -40,7 +33,6 @@ export default async function UsersPage() {
       users={usersResult.data || []}
       currentUserId={currentUser.id}
       projects={projects}
-      roles={rolesResult.data || []}
     />
   );
 }

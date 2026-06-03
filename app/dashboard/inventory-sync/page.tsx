@@ -1,19 +1,13 @@
-import { fetchInventoryItems, fetchIntegrations, fetchSyncConfigurations } from "@/lib/fetchers";
+import { fetchInventoryItems } from "@/lib/fetchers";
 import { InventorySyncClient } from "./client";
 
 export default async function InventorySyncPage() {
-  const [itemsResult, integrationsResult, configsResult] = await Promise.all([
-    fetchInventoryItems(),
-    fetchIntegrations(),
-    fetchSyncConfigurations(),
-  ]);
+  const itemsResult = await fetchInventoryItems();
 
   return (
     <InventorySyncClient
       inventoryItems={itemsResult.data}
-      integrations={integrationsResult.data}
-      syncConfigs={configsResult.data}
-      error={itemsResult.error || integrationsResult.error || configsResult.error}
+      error={itemsResult.error}
     />
   );
 }
