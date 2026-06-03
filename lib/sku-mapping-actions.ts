@@ -309,6 +309,7 @@ export interface MappingRow {
   canonicalSku: string;
   name: string;
   katanaVariantId: string | null;
+  katanaProductId: string | null;
   katanaSku: string | null;
   reverbListingId: string | null;
   reverbSku: string | null;
@@ -318,6 +319,7 @@ export interface MappingRow {
 
 export interface UnmappedKatana {
   variantId: string;
+  productId: string | null;
   productName: string;
   variantName: string | null;
   sku: string | null;
@@ -332,6 +334,7 @@ export interface UnmappedReverb {
 
 export interface SuggestedMatch {
   katanaVariantId: string;
+  katanaProductId: string | null;
   katanaLabel: string;
   reverbListingId: string;
   reverbTitle: string;
@@ -360,6 +363,10 @@ export async function fetchMappingData(): Promise<{
       prisma.reverbCatalogListing.findMany({ orderBy: { title: "asc" } }),
     ]);
 
+    const productIdByVariantId = new Map(
+      katanaCatalog.map((v) => [v.variantId, v.productId])
+    );
+
     const mappings: MappingRow[] = items.map((item) => {
       const k = item.skuMappings.find((m) => m.platform === IntegrationPlatform.KATANA);
       const r = item.skuMappings.find((m) => m.platform === IntegrationPlatform.REVERB);
@@ -368,6 +375,7 @@ export async function fetchMappingData(): Promise<{
         canonicalSku: item.sku,
         name: item.name,
         katanaVariantId: k?.externalId ?? null,
+        katanaProductId: k?.externalId ? productIdByVariantId.get(k.externalId) ?? null : null,
         katanaSku: k?.externalSku ?? null,
         reverbListingId: r?.externalId ?? null,
         reverbSku: r?.externalSku ?? null,
@@ -387,6 +395,7 @@ export async function fetchMappingData(): Promise<{
       .filter((v) => !mappedKatanaIds.has(v.variantId))
       .map((v) => ({
         variantId: v.variantId,
+        productId: v.productId,
         productName: v.productName,
         variantName: v.variantName,
         sku: v.sku,
@@ -488,6 +497,7 @@ export async function autoSuggestMatches(): Promise<{
         usedReverb.add(best.listing.listingId);
         suggestions.push({
           katanaVariantId: k.variantId,
+          katanaProductId: k.productId,
           katanaLabel: kLabel || k.sku || k.variantId,
           reverbListingId: best.listing.listingId,
           reverbTitle: best.listing.title,

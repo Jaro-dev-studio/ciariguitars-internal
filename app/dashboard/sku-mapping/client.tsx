@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Sparkles,
   Info,
+  ExternalLink,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -60,6 +61,41 @@ interface SKUMappingClientProps {
   katanaImported: number;
   reverbImported: number;
   error: string | null;
+}
+
+const KATANA_APP_BASE =
+  process.env.NEXT_PUBLIC_KATANA_APP_BASE_URL || "https://factory.katanamrp.com";
+
+function reverbItemUrl(listingId: string): string {
+  return `https://reverb.com/item/${listingId}`;
+}
+
+function katanaProductUrl(productId: string | null): string | null {
+  return productId ? `${KATANA_APP_BASE}/items/products/${productId}` : null;
+}
+
+function TitleLink({
+  href,
+  children,
+  className,
+}: {
+  href: string | null;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  if (!href) return <span className={className}>{children}</span>;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className={cn("inline-flex items-center gap-1 hover:underline", className)}
+    >
+      <span className="truncate">{children}</span>
+      <ExternalLink className="size-3 shrink-0 opacity-60" />
+    </a>
+  );
 }
 
 function StatCard({
@@ -395,9 +431,14 @@ export function SKUMappingClient({
                 className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
-                  <span className="font-medium">{s.katanaLabel}</span>
-                  <span className="text-muted-foreground">
-                    to <span className="text-foreground">{s.reverbTitle}</span>
+                  <TitleLink href={katanaProductUrl(s.katanaProductId)} className="font-medium">
+                    {s.katanaLabel}
+                  </TitleLink>
+                  <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
+                    to{" "}
+                    <TitleLink href={reverbItemUrl(s.reverbListingId)} className="text-foreground">
+                      {s.reverbTitle}
+                    </TitleLink>
                   </span>
                   <Badge variant="outline" className="w-fit text-xs">
                     {Math.round(s.score * 100)}%
@@ -460,12 +501,22 @@ export function SKUMappingClient({
                     >
                       <TableCell className="font-mono text-sm font-medium">{m.canonicalSku}</TableCell>
                       <TableCell className="max-w-48 truncate">{m.name}</TableCell>
-                      <TableCell className="font-mono text-xs">{m.katanaVariantId ?? "-"}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {m.katanaVariantId ? (
+                          <TitleLink href={katanaProductUrl(m.katanaProductId)}>
+                            {m.katanaVariantId}
+                          </TitleLink>
+                        ) : (
+                          "-"
+                        )}
+                      </TableCell>
                       <TableCell>
                         {m.reverbListingId ? (
-                          <div className="flex items-center gap-1">
-                            <CheckCircle2 className="size-3.5 text-accent" />
-                            <span className="max-w-48 truncate text-xs">{m.reverbTitle ?? m.reverbListingId}</span>
+                          <div className="flex max-w-48 items-center gap-1">
+                            <CheckCircle2 className="size-3.5 shrink-0 text-accent" />
+                            <TitleLink href={reverbItemUrl(m.reverbListingId)} className="text-xs">
+                              {m.reverbTitle ?? m.reverbListingId}
+                            </TitleLink>
                           </div>
                         ) : (
                           <span className="flex items-center gap-1 text-muted-foreground">

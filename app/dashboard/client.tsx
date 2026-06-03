@@ -13,7 +13,6 @@ import {
   TrendingDown,
   ArrowRight,
   Activity,
-  Zap,
   Info,
 } from "lucide-react";
 import Link from "next/link";
