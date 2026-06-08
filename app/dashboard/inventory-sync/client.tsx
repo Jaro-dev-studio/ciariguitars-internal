@@ -13,6 +13,10 @@ import {
   Package,
   Link2,
   Info,
+  Eye,
+  FlaskConical,
+  ArrowRight,
+  Ban,
 } from "lucide-react";
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,13 +39,17 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/empty-state";
 import { PageIntro } from "@/components/page-intro";
-import { runReverbSyncNow } from "@/lib/integration-actions";
+import { runReverbSyncNow, previewReverbSync } from "@/lib/integration-actions";
+import type { ReverbSyncPlan } from "@/lib/integrations/inventory-sync";
 
 interface InventorySyncClientProps {
   inventoryItems: any[] | null;
   error: string | null;
+  dryRun: boolean;
+  reverbWritesEnabled: boolean;
 }
 
 interface SyncRow {
@@ -83,11 +91,166 @@ function StatCard({
   );
 }
 
-export function InventorySyncClient({ inventoryItems, error }: InventorySyncClientProps) {
+const KATANA_APP_BASE =
+  process.env.NEXT_PUBLIC_KATANA_APP_BASE_URL || "https://factory.katanamrp.com";
+
+function reverbItemUrl(listingId: string | null): string | null {
+  return listingId ? `https://reverb.com/item/${listingId}` : null;
+}
+
+function katanaProductUrl(productId: string | null): string | null {
+  return productId ? `${KATANA_APP_BASE}/items/products/${productId}` : null;
+}
+
+function ExternalTitleLink({
+  href,
+  children,
+  className,
+}: {
+  href: string | null;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  if (!href) return <span className={cn("block truncate", className)}>{children}</span>;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={cn("flex min-w-0 max-w-full items-center gap-1 hover:underline", className)}
+    >
+      <span className="min-w-0 truncate">{children}</span>
+      <ExternalLink className="size-3 shrink-0 opacity-60" />
+    </a>
+  );
+}
+
+const PLAN_ACTION_META: Record<
+  ReverbSyncPlan["items"][number]["action"],
+  { label: string; className: string }
+> = {
+  update: { label: "Would update", className: "border-primary/40 bg-primary/10 text-primary" },
+  unpublish: { label: "Would unpublish", className: "border-warning/40 bg-warning/10 text-warning" },
+  noop: { label: "No change", className: "border-muted-foreground/30 bg-muted text-muted-foreground" },
+  skip: { label: "Skipped", className: "border-destructive/40 bg-destructive/10 text-destructive" },
+};
+
+function PreviewPanel({ plan, onClose }: { plan: ReverbSyncPlan; onClose: () => void }) {
+  const changes = plan.willUpdate + plan.willUnpublish;
+  return (
+    <Card className="border-primary/30">
+      <CardHeader className="pb-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Eye className="size-4" /> Sync preview (dry run)
+            </CardTitle>
+            <CardDescription>
+              Read-only - generated {new Date(plan.generatedAt).toLocaleString()}. Nothing was
+              written to Reverb.
+            </CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Dismiss
+          </Button>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+          <Badge variant="outline" className={PLAN_ACTION_META.update.className}>
+            {plan.willUpdate} would update
+          </Badge>
+          <Badge variant="outline" className={PLAN_ACTION_META.unpublish.className}>
+            {plan.willUnpublish} would unpublish
+          </Badge>
+          <Badge variant="outline" className={PLAN_ACTION_META.noop.className}>
+            {plan.noop} no change
+          </Badge>
+          <Badge variant="outline" className={PLAN_ACTION_META.skip.className}>
+            {plan.skipped} skipped
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {changes === 0 ? (
+          <p className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
+            Everything is already in sync - no updates or unpublishes would be made.
+          </p>
+        ) : (
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Listing</TableHead>
+                  <TableHead>Canonical SKU</TableHead>
+                  <TableHead className="text-center">Reverb now</TableHead>
+                  <TableHead className="text-center"></TableHead>
+                  <TableHead className="text-center">Target</TableHead>
+                  <TableHead>Planned action</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {plan.items
+                  .filter((i) => i.action === "update" || i.action === "unpublish")
+                  .map((item) => {
+                    const meta = PLAN_ACTION_META[item.action];
+                    return (
+                      <TableRow key={`${item.canonicalSku}-${item.reverbListingId}`}>
+                        <TableCell className="max-w-[280px]">
+                          <ExternalTitleLink
+                            href={reverbItemUrl(item.reverbListingId)}
+                            className="font-medium"
+                          >
+                            {item.reverbTitle ?? item.reverbListingId ?? "-"}
+                          </ExternalTitleLink>
+                          {item.currentState && (
+                            <p className="text-xs text-muted-foreground">
+                              state: {item.currentState}
+                            </p>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-sm">
+                          <ExternalTitleLink href={katanaProductUrl(item.katanaProductId)}>
+                            {item.canonicalSku}
+                          </ExternalTitleLink>
+                        </TableCell>
+                        <TableCell className="text-center font-mono">
+                          {item.currentReverbQty ?? "-"}
+                        </TableCell>
+                        <TableCell className="text-center text-muted-foreground">
+                          <ArrowRight className="mx-auto size-4" />
+                        </TableCell>
+                        <TableCell className="text-center font-mono font-medium">
+                          {item.action === "unpublish" ? "0 (unpublish)" : item.targetQty}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={cn("text-xs", meta.className)}>
+                            {meta.label}
+                          </Badge>
+                          <p className="mt-1 text-xs text-muted-foreground">{item.reason}</p>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function InventorySyncClient({
+  inventoryItems,
+  error,
+  dryRun,
+  reverbWritesEnabled,
+}: InventorySyncClientProps) {
   const router = useRouter();
   const [searchTerm, setSearchTerm] = useState("");
   const [syncFilter, setSyncFilter] = useState<string>("all");
   const [isSyncing, startSync] = useTransition();
+  const [isPreviewing, startPreview] = useTransition();
+  const [plan, setPlan] = useState<ReverbSyncPlan | null>(null);
 
   const items = inventoryItems ?? [];
 
@@ -123,22 +286,39 @@ export function InventorySyncClient({ inventoryItems, error }: InventorySyncClie
     return matchesSearch && matchesSync;
   });
 
-  const handleSync = () => {
+  const handlePreview = () => {
+    startPreview(async () => {
+      toast.info("Building dry-run preview...");
+      const { data, error } = await previewReverbSync();
+      if (error || !data) {
+        toast.error("Preview failed", { description: error ?? undefined });
+        return;
+      }
+      setPlan(data);
+      const changes = data.willUpdate + data.willUnpublish;
+      toast.success(
+        changes > 0 ? `${changes} change(s) would be applied` : "No changes needed",
+        {
+          description: `${data.willUpdate} update, ${data.willUnpublish} unpublish, ${data.noop} unchanged, ${data.skipped} skipped`,
+        }
+      );
+    });
+  };
+
+  const handleApply = () => {
     startSync(async () => {
-      toast.info("Running Katana to Reverb sync...");
+      toast.info("Applying Katana to Reverb sync...");
       const { data, error } = await runReverbSyncNow();
       if (error) {
         toast.error("Sync failed", { description: error });
         return;
       }
-      toast.success(
-        data && !data.writesEnabled ? "Sync complete (dry run)" : "Sync complete",
-        {
-          description: data
-            ? `${data.updated} updated, ${data.unpublished} unpublished, ${data.skipped} skipped, ${data.failed} failed`
-            : undefined,
-        }
-      );
+      toast.success("Sync complete", {
+        description: data
+          ? `${data.updated} updated, ${data.unpublished} unpublished, ${data.skipped} skipped, ${data.failed} failed`
+          : undefined,
+      });
+      setPlan(null);
       router.refresh();
     });
   };
@@ -154,19 +334,73 @@ export function InventorySyncClient({ inventoryItems, error }: InventorySyncClie
           <h1 className="text-2xl font-bold tracking-tight">Inventory Sync</h1>
           <p className="text-muted-foreground">Push Katana stock levels to Reverb</p>
         </div>
-        <Button size="sm" onClick={handleSync} disabled={isSyncing || rows.length === 0}>
-          <RefreshCw className={cn("mr-2 size-4", isSyncing && "animate-spin")} />
-          {isSyncing ? "Syncing..." : "Sync now"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handlePreview}
+            disabled={isPreviewing || rows.length === 0}
+          >
+            <Eye className={cn("mr-2 size-4", isPreviewing && "animate-pulse")} />
+            {isPreviewing ? "Previewing..." : "Preview changes"}
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleApply}
+            disabled={isSyncing || rows.length === 0 || dryRun || !reverbWritesEnabled}
+            title={
+              dryRun
+                ? "Dry run is enabled (SYNC_DRY_RUN). Disable it to apply changes."
+                : !reverbWritesEnabled
+                  ? "Reverb writes are disabled (SYNC_REVERB_WRITES_ENABLED)."
+                  : undefined
+            }
+          >
+            {dryRun ? (
+              <Ban className="mr-2 size-4" />
+            ) : (
+              <RefreshCw className={cn("mr-2 size-4", isSyncing && "animate-spin")} />
+            )}
+            {isSyncing ? "Applying..." : "Apply sync"}
+          </Button>
+        </div>
       </div>
+
+      {dryRun ? (
+        <div className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+          <FlaskConical className="mt-0.5 size-4 shrink-0 text-warning" />
+          <div className="text-foreground">
+            <p className="font-medium">Dry run is on - nothing will be written to Reverb.</p>
+            <p className="text-muted-foreground">
+              Use <strong>Preview changes</strong> to see exactly what would be updated or
+              unpublished. To go live, set <code className="font-mono">SYNC_DRY_RUN=false</code>{" "}
+              (and <code className="font-mono">SYNC_REVERB_WRITES_ENABLED=true</code>), then use{" "}
+              <strong>Apply sync</strong>.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-start gap-3 rounded-lg border border-accent/40 bg-accent/10 p-3 text-sm">
+          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-accent" />
+          <p className="text-foreground">
+            Live mode -{" "}
+            {reverbWritesEnabled
+              ? "Apply sync will write changes to Reverb."
+              : "Reverb writes are still disabled (SYNC_REVERB_WRITES_ENABLED=false)."}
+          </p>
+        </div>
+      )}
 
       <PageIntro icon={Info}>
         This page keeps Reverb stock in line with Katana. For every mapped item it pushes the
         Katana <strong>net-available</strong> quantity (in stock minus committed) to the Reverb
         listing. When net-available reaches zero the listing is automatically unpublished, and
-        prices and listing content are never touched. The sync runs automatically every 15 minutes;
-        use <strong>Sync now</strong> to run it on demand.
+        prices and listing content are never touched. <strong>Preview changes</strong> reads live
+        data and shows what would happen without writing anything; <strong>Apply sync</strong>{" "}
+        performs the writes (disabled while dry run is on).
       </PageIntro>
+
+      {plan && <PreviewPanel plan={plan} onClose={() => setPlan(null)} />}
 
       {error && (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4">

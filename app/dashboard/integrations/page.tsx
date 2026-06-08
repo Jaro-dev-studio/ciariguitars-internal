@@ -1,4 +1,5 @@
 import { fetchIntegrations, fetchSyncConfigurations } from "@/lib/fetchers";
+import { getIntegrationConfig } from "@/lib/integrations/config";
 import { IntegrationsClient } from "./client";
 import { LiveConnections } from "@/components/integrations/live-connections";
 
@@ -7,10 +8,11 @@ export default async function IntegrationsPage() {
     fetchIntegrations(),
     fetchSyncConfigurations(),
   ]);
+  const { flags } = getIntegrationConfig();
 
   return (
     <div className="space-y-6">
-      <LiveConnections />
+      <LiveConnections dryRun={flags.dryRun} />
       <IntegrationsClient
         integrations={integrationsResult.data}
         syncConfigs={configsResult.data}

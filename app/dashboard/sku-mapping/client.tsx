@@ -83,16 +83,17 @@ function TitleLink({
   children: React.ReactNode;
   className?: string;
 }) {
-  if (!href) return <span className={className}>{children}</span>;
+  if (!href)
+    return <span className={cn("block truncate", className)}>{children}</span>;
   return (
     <a
       href={href}
       target="_blank"
       rel="noopener noreferrer"
       onClick={(e) => e.stopPropagation()}
-      className={cn("inline-flex items-center gap-1 hover:underline", className)}
+      className={cn("flex min-w-0 max-w-full items-center gap-1 hover:underline", className)}
     >
-      <span className="truncate">{children}</span>
+      <span className="min-w-0 truncate">{children}</span>
       <ExternalLink className="size-3 shrink-0 opacity-60" />
     </a>
   );
@@ -510,9 +511,9 @@ export function SKUMappingClient({
                           "-"
                         )}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="max-w-[280px]">
                         {m.reverbListingId ? (
-                          <div className="flex max-w-48 items-center gap-1">
+                          <div className="flex min-w-0 items-center gap-1">
                             <CheckCircle2 className="size-3.5 shrink-0 text-accent" />
                             <TitleLink href={reverbItemUrl(m.reverbListingId)} className="text-xs">
                               {m.reverbTitle ?? m.reverbListingId}
@@ -524,8 +525,8 @@ export function SKUMappingClient({
                           </span>
                         )}
                       </TableCell>
-                      <TableCell>
-                        <div className="flex gap-1">
+                      <TableCell className="w-20">
+                        <div className="flex shrink-0 gap-1">
                           <Button
                             variant="ghost"
                             size="icon"

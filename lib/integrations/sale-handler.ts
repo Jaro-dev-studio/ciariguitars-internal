@@ -40,10 +40,11 @@ export async function processReverbSale(
   source: "webhook" | "poll" = "webhook"
 ): Promise<SaleProcessResult> {
   const { flags } = getIntegrationConfig();
-  const writesEnabled = flags.katanaWritesEnabled;
+  // Master dry-run switch overrides the per-platform write flag.
+  const writesEnabled = flags.katanaWritesEnabled && !flags.dryRun;
 
   console.log(
-    `[ReverbSale] Processing order ${order.order_number} from ${source} (Katana writes ${writesEnabled ? "ENABLED" : "DISABLED - dry run"})`
+    `[ReverbSale] Processing order ${order.order_number} from ${source} (Katana writes ${writesEnabled ? "ENABLED" : "DISABLED - dry run"}${flags.dryRun ? ", SYNC_DRY_RUN on" : ""})`
   );
 
   const result: SaleProcessResult = {

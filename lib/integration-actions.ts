@@ -8,7 +8,11 @@ import { authOptions } from "@/authOptions";
 import { getIntegrationConfig } from "@/lib/integrations/config";
 import { katana } from "@/lib/integrations/katana";
 import { reverb } from "@/lib/integrations/reverb";
-import { runKatanaToReverbSync } from "@/lib/integrations/inventory-sync";
+import {
+  runKatanaToReverbSync,
+  previewKatanaToReverbSync,
+  type ReverbSyncPlan,
+} from "@/lib/integrations/inventory-sync";
 import { pollReverbOrders } from "@/lib/integrations/sale-handler";
 import { touchIntegrationLastSync } from "@/lib/integrations/sync-logger";
 
@@ -145,6 +149,30 @@ export async function dismissAlert(alertId: string): Promise<{
   }
 }
 
+export async function previewReverbSync(): Promise<{
+  data: ReverbSyncPlan | null;
+  error: string | null;
+}> {
+  try {
+    const userId = await requireAuth();
+    if (!userId) return { data: null, error: "Not authenticated" };
+
+    console.log("[IntegrationActions] Dry-run preview requested");
+    const locationId = process.env.KATANA_DEFAULT_LOCATION_ID;
+    const plan = await previewKatanaToReverbSync({
+      locationIds: locationId ? [Number(locationId)] : undefined,
+    });
+
+    return { data: plan, error: null };
+  } catch (error) {
+    console.error("[IntegrationActions] previewReverbSync failed:", error);
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "Preview failed",
+    };
+  }
+}
+
 export async function runReverbSyncNow(): Promise<{
   data: Awaited<ReturnType<typeof runKatanaToReverbSync>> | null;
   error: string | null;
@@ -152,6 +180,15 @@ export async function runReverbSyncNow(): Promise<{
   try {
     const userId = await requireAuth();
     if (!userId) return { data: null, error: "Not authenticated" };
+
+    const { flags } = getIntegrationConfig();
+    if (flags.dryRun) {
+      console.log("[IntegrationActions] Apply blocked - SYNC_DRY_RUN is on");
+      return {
+        data: null,
+        error: "Dry run is enabled (SYNC_DRY_RUN). Use Preview, or disable dry run to apply changes.",
+      };
+    }
 
     console.log("[IntegrationActions] Manual Katana -> Reverb sync triggered");
     const locationId = process.env.KATANA_DEFAULT_LOCATION_ID;

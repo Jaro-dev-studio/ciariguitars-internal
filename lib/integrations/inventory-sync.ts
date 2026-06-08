@@ -53,10 +53,11 @@ export async function runKatanaToReverbSync(options: {
 } = {}): Promise<ReverbSyncRunResult> {
   const startedAt = new Date();
   const { flags } = getIntegrationConfig();
-  const writesEnabled = flags.reverbWritesEnabled;
+  // Master dry-run switch overrides the per-platform write flag.
+  const writesEnabled = flags.reverbWritesEnabled && !flags.dryRun;
 
   console.log(
-    `[ReverbSync] Starting Katana -> Reverb sync (writes ${writesEnabled ? "ENABLED" : "DISABLED - dry run"})`
+    `[ReverbSync] Starting Katana -> Reverb sync (writes ${writesEnabled ? "ENABLED" : "DISABLED - dry run"}${flags.dryRun ? ", SYNC_DRY_RUN on" : ""})`
   );
 
   const result: ReverbSyncRunResult = {
@@ -264,6 +265,175 @@ export async function runKatanaToReverbSync(options: {
     `[ReverbSync] Done. updated=${result.updated} unpublished=${result.unpublished} noop=${result.noop} skipped=${result.skipped} failed=${result.failed}`
   );
   return result;
+}
+
+// ============================================
+// READ-ONLY PREVIEW (dry run)
+// ============================================
+
+export interface ReverbSyncPlanItem {
+  canonicalSku: string;
+  reverbTitle: string | null;
+  reverbListingId: string | null;
+  katanaVariantId: string | null;
+  katanaProductId: string | null;
+  currentReverbQty: number | null;
+  currentState: string | null;
+  targetQty: number;
+  action: "update" | "unpublish" | "noop" | "skip";
+  reason: string;
+}
+
+export interface ReverbSyncPlan {
+  generatedAt: string;
+  /** SYNC_DRY_RUN master flag state. */
+  dryRunFlag: boolean;
+  /** Effective: would a real "Apply" actually write to Reverb right now? */
+  writesEnabled: boolean;
+  totalConsidered: number;
+  willUpdate: number;
+  willUnpublish: number;
+  noop: number;
+  skipped: number;
+  items: ReverbSyncPlanItem[];
+}
+
+/**
+ * Computes EXACTLY what runKatanaToReverbSync would do, without writing
+ * anything (no Reverb calls, no sync logs, no local cache updates). Used to
+ * power the dry-run preview UI so the team can review changes before enabling
+ * real writes.
+ */
+export async function previewKatanaToReverbSync(options: {
+  locationIds?: number[];
+  onlyCanonicalSkus?: string[];
+} = {}): Promise<ReverbSyncPlan> {
+  const { flags } = getIntegrationConfig();
+  const writesEnabled = flags.reverbWritesEnabled && !flags.dryRun;
+
+  console.log("[ReverbSync] Building dry-run preview (read-only)...");
+
+  const plan: ReverbSyncPlan = {
+    generatedAt: new Date().toISOString(),
+    dryRunFlag: flags.dryRun,
+    writesEnabled,
+    totalConsidered: 0,
+    willUpdate: 0,
+    willUnpublish: 0,
+    noop: 0,
+    skipped: 0,
+    items: [],
+  };
+
+  let syncable = await listSyncableItems();
+  if (options.onlyCanonicalSkus?.length) {
+    const set = new Set(options.onlyCanonicalSkus);
+    syncable = syncable.filter((s) => set.has(s.canonicalSku));
+  }
+  plan.totalConsidered = syncable.length;
+
+  const variantIds = syncable
+    .map((s) => Number(s.katanaVariantId))
+    .filter((n) => Number.isFinite(n));
+
+  let inventoryByVariant = new Map<number, KatanaInventory>();
+  try {
+    const inventory = await katana.getInventoryForVariants({
+      variantIds,
+      locationIds: options.locationIds,
+      limit: 250,
+    });
+    inventoryByVariant = aggregateInventory(inventory);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.error("[ReverbSync] Preview inventory fetch failed:", msg);
+    throw new Error(`Could not fetch Katana inventory: ${msg}`);
+  }
+
+  // Resolve Katana productId per variant (for deep links) from the staging catalog.
+  const katanaVariantIds = syncable
+    .map((s) => s.katanaVariantId)
+    .filter((id): id is string => Boolean(id));
+  const productIdByVariantId = new Map<string, string | null>();
+  if (katanaVariantIds.length) {
+    const staged = await prisma.katanaCatalogVariant.findMany({
+      where: { variantId: { in: katanaVariantIds } },
+      select: { variantId: true, productId: true },
+    });
+    for (const s of staged) productIdByVariantId.set(s.variantId, s.productId);
+  }
+
+  for (const item of syncable) {
+    const variantId = Number(item.katanaVariantId);
+    const inv = inventoryByVariant.get(variantId);
+    const targetQty = inv ? netAvailable(inv) : 0;
+
+    const planItem: ReverbSyncPlanItem = {
+      canonicalSku: item.canonicalSku,
+      reverbTitle: null,
+      reverbListingId: item.reverbListingId,
+      katanaVariantId: item.katanaVariantId,
+      katanaProductId: item.katanaVariantId
+        ? productIdByVariantId.get(item.katanaVariantId) ?? null
+        : null,
+      currentReverbQty: null,
+      currentState: null,
+      targetQty,
+      action: "skip",
+      reason: "",
+    };
+
+    try {
+      const listing = await loadReverbListing(item.reverbListingId, item.reverbSku);
+      if (!listing) {
+        planItem.action = "skip";
+        planItem.reason = "Reverb listing not found";
+        plan.skipped++;
+        plan.items.push(planItem);
+        continue;
+      }
+
+      planItem.reverbTitle = listing.title ?? null;
+      planItem.currentReverbQty = listing.inventory ?? null;
+      planItem.currentState = listing.state?.slug ?? null;
+
+      const currentQty = listing.inventory ?? 0;
+      const isLive = listing.state?.slug === "live";
+      const shouldUnpublish = targetQty <= 0;
+
+      if (shouldUnpublish) {
+        if (!isLive && currentQty === 0) {
+          planItem.action = "noop";
+          planItem.reason = "Already at 0 and not live";
+          plan.noop++;
+        } else {
+          planItem.action = "unpublish";
+          planItem.reason = `Katana net-available is 0 - would unpublish (qty ${currentQty} -> 0)`;
+          plan.willUnpublish++;
+        }
+      } else if (currentQty === targetQty && isLive) {
+        planItem.action = "noop";
+        planItem.reason = "Quantities already match";
+        plan.noop++;
+      } else {
+        planItem.action = "update";
+        planItem.reason = `Would set Reverb qty ${currentQty} -> ${targetQty}${isLive ? "" : " and publish"}`;
+        plan.willUpdate++;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      planItem.action = "skip";
+      planItem.reason = `Could not read Reverb listing: ${msg}`;
+      plan.skipped++;
+    }
+
+    plan.items.push(planItem);
+  }
+
+  console.log(
+    `[ReverbSync] Preview ready: update=${plan.willUpdate} unpublish=${plan.willUnpublish} noop=${plan.noop} skip=${plan.skipped}`
+  );
+  return plan;
 }
 
 async function loadReverbListing(

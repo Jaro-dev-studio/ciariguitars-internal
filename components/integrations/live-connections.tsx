@@ -5,18 +5,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { CheckCircle2, XCircle, RefreshCw, Zap, ShoppingCart, Webhook } from "lucide-react";
+import { CheckCircle2, XCircle, RefreshCw, Zap, ShoppingCart, Webhook, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
   testConnections,
   runReverbSyncNow,
+  previewReverbSync,
   pollReverbSalesNow,
   registerWebhooks,
   type ConnectionStatus,
 } from "@/lib/integration-actions";
 
-export function LiveConnections() {
+export function LiveConnections({ dryRun = true }: { dryRun?: boolean }) {
   const [statuses, setStatuses] = useState<ConnectionStatus[] | null>(null);
   const [isTesting, startTest] = useTransition();
   const [isSyncing, startSync] = useTransition();
@@ -45,18 +46,27 @@ export function LiveConnections() {
 
   const handleSync = () => {
     startSync(async () => {
+      // Under dry run, run the read-only preview instead of the (blocked) write.
+      if (dryRun) {
+        const { data, error } = await previewReverbSync();
+        if (error || !data) {
+          toast.error("Preview failed", { description: error ?? undefined });
+          return;
+        }
+        toast.success("Reverb sync preview (dry run)", {
+          description: `${data.willUpdate} would update, ${data.willUnpublish} would unpublish, ${data.noop} unchanged, ${data.skipped} skipped`,
+        });
+        return;
+      }
       const { data, error } = await runReverbSyncNow();
       if (error) {
         toast.error("Reverb sync failed", { description: error });
         return;
       }
       if (data) {
-        toast.success(
-          data.writesEnabled ? "Reverb sync complete" : "Reverb sync (dry run) complete",
-          {
-            description: `updated ${data.updated}, unpublished ${data.unpublished}, noop ${data.noop}, skipped ${data.skipped}, failed ${data.failed}`,
-          }
-        );
+        toast.success("Reverb sync complete", {
+          description: `updated ${data.updated}, unpublished ${data.unpublished}, noop ${data.noop}, skipped ${data.skipped}, failed ${data.failed}`,
+        });
       }
       refresh();
     });
@@ -151,10 +161,12 @@ export function LiveConnections() {
           <Button size="sm" onClick={handleSync} disabled={isSyncing}>
             {isSyncing ? (
               <RefreshCw className="mr-1 size-3 animate-spin" />
+            ) : dryRun ? (
+              <Eye className="mr-1 size-3" />
             ) : (
               <Zap className="mr-1 size-3" />
             )}
-            Run Katana to Reverb sync
+            {dryRun ? "Preview Katana to Reverb sync" : "Run Katana to Reverb sync"}
           </Button>
           <Button size="sm" variant="outline" onClick={handlePoll} disabled={isPolling}>
             {isPolling ? (
