@@ -20,6 +20,8 @@ export interface RecordSyncLogInput {
   newValue?: unknown;
   errorMessage?: string;
   details?: string;
+  /** True when produced by a dry run (no real write happened). */
+  dryRun?: boolean;
 }
 
 export async function recordSyncLog(input: RecordSyncLogInput) {
@@ -41,6 +43,7 @@ export async function recordSyncLog(input: RecordSyncLogInput) {
             : (input.newValue as object),
         errorMessage: input.errorMessage,
         details: input.details,
+        dryRun: input.dryRun ?? false,
       },
     });
   } catch (err) {

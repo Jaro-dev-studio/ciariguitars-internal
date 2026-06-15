@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runKatanaToReverbSync } from "@/lib/integrations/inventory-sync";
-import { pollReverbOrders } from "@/lib/integrations/sale-handler";
 
 export const maxDuration = 300;
 
@@ -22,18 +21,15 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    console.log("[CronInventorySync] ========== Starting Katana <-> Reverb sync ==========");
+    console.log("[CronInventorySync] ========== Starting Katana -> Reverb inventory push ==========");
 
     const locationId = process.env.KATANA_DEFAULT_LOCATION_ID;
-    console.log("[CronInventorySync] Step 1: pushing Katana availability to Reverb...");
+    console.log("[CronInventorySync] Pushing Katana availability to Reverb...");
     const syncResult = await runKatanaToReverbSync({
       locationIds: locationId ? [Number(locationId)] : undefined,
     });
 
-    console.log("[CronInventorySync] Step 2: polling Reverb orders for Katana decrements...");
-    const orders = await pollReverbOrders({ sinceHours: 6 });
-
-    console.log("[CronInventorySync] ========== Sync complete ==========");
+    console.log("[CronInventorySync] ========== Inventory push complete ==========");
     return NextResponse.json({
       data: {
         sync: {
@@ -44,7 +40,6 @@ export async function GET(request: NextRequest) {
           failed: syncResult.failed,
           writesEnabled: syncResult.writesEnabled,
         },
-        ordersProcessed: orders.length,
       },
       error: null,
     });

@@ -213,6 +213,7 @@ export async function runKatanaToReverbSync(options: {
         inventoryItemId: item.inventoryItemId,
         previousValue: { inventory: currentQty, state: listing.state?.slug },
         newValue: { inventory: targetQty, action: itemResult.action },
+        dryRun: !writesEnabled,
         details: writesEnabled
           ? `Reverb listing ${listing.id} ${itemResult.action}`
           : `[dry-run] Reverb listing ${listing.id} ${itemResult.action}`,
@@ -434,6 +435,89 @@ export async function previewKatanaToReverbSync(options: {
     `[ReverbSync] Preview ready: update=${plan.willUpdate} unpublish=${plan.willUnpublish} noop=${plan.noop} skip=${plan.skipped}`
   );
   return plan;
+}
+
+// ============================================
+// READ-ONLY SNAPSHOT REFRESH (no writes to either platform)
+// ============================================
+
+export interface InventorySnapshotResult {
+  refreshedAt: string;
+  total: number;
+  updated: number;
+  failed: number;
+}
+
+/**
+ * Pulls the CURRENT quantities from both platforms and refreshes the local
+ * cache so the Inventory Sync table reflects reality: Katana net-available
+ * (in stock - committed) and the live Reverb listing inventory. This never
+ * writes to Katana or Reverb - it only updates our own InventoryItem rows.
+ */
+export async function refreshInventorySnapshot(options: {
+  locationIds?: number[];
+} = {}): Promise<InventorySnapshotResult> {
+  console.log("[InventorySnapshot] Refreshing live Katana + Reverb quantities (read-only)...");
+
+  const syncable = await listSyncableItems();
+  const result: InventorySnapshotResult = {
+    refreshedAt: new Date().toISOString(),
+    total: syncable.length,
+    updated: 0,
+    failed: 0,
+  };
+
+  console.log(`[InventorySnapshot] Fetching Katana inventory for ${syncable.length} mapped items...`);
+  const variantIds = syncable
+    .map((s) => Number(s.katanaVariantId))
+    .filter((n) => Number.isFinite(n));
+
+  let inventoryByVariant = new Map<number, KatanaInventory>();
+  try {
+    const inventory = await katana.getInventoryForVariants({
+      variantIds,
+      locationIds: options.locationIds,
+      limit: 250,
+    });
+    inventoryByVariant = aggregateInventory(inventory);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.error("[InventorySnapshot] Katana inventory fetch failed:", msg);
+    throw new Error(`Could not fetch Katana inventory: ${msg}`);
+  }
+
+  console.log("[InventorySnapshot] Reading current Reverb listing quantities...");
+  for (const item of syncable) {
+    try {
+      const variantId = Number(item.katanaVariantId);
+      const inv = inventoryByVariant.get(variantId);
+      const katanaNet = inv ? netAvailable(inv) : 0;
+
+      const listing = await loadReverbListing(item.reverbListingId, item.reverbSku);
+      const reverbQty = listing?.inventory ?? 0;
+
+      await prisma.inventoryItem.update({
+        where: { id: item.inventoryItemId },
+        data: {
+          katanaQty: katanaNet,
+          reverbQty,
+          isReadyToShip: katanaNet > 0,
+        },
+      });
+      result.updated++;
+    } catch (err) {
+      result.failed++;
+      console.error(
+        `[InventorySnapshot] Failed to refresh ${item.canonicalSku}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  console.log(
+    `[InventorySnapshot] Done. updated=${result.updated} failed=${result.failed}`
+  );
+  return result;
 }
 
 async function loadReverbListing(

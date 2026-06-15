@@ -42,7 +42,11 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/empty-state";
 import { PageIntro } from "@/components/page-intro";
-import { runReverbSyncNow, previewReverbSync } from "@/lib/integration-actions";
+import {
+  runReverbSyncNow,
+  previewReverbSync,
+  refreshInventorySnapshotNow,
+} from "@/lib/integration-actions";
 import type { ReverbSyncPlan } from "@/lib/integrations/inventory-sync";
 
 interface InventorySyncClientProps {
@@ -250,6 +254,7 @@ export function InventorySyncClient({
   const [syncFilter, setSyncFilter] = useState<string>("all");
   const [isSyncing, startSync] = useTransition();
   const [isPreviewing, startPreview] = useTransition();
+  const [isRefreshing, startRefresh] = useTransition();
   const [plan, setPlan] = useState<ReverbSyncPlan | null>(null);
 
   const items = inventoryItems ?? [];
@@ -285,6 +290,23 @@ export function InventorySyncClient({
     else if (syncFilter === "mismatch") matchesSync = row.katanaQty !== row.reverbQty;
     return matchesSearch && matchesSync;
   });
+
+  const handleRefresh = () => {
+    startRefresh(async () => {
+      toast.info("Refreshing live quantities from Katana and Reverb...");
+      const { data, error } = await refreshInventorySnapshotNow();
+      if (error) {
+        toast.error("Refresh failed", { description: error });
+        return;
+      }
+      toast.success("Quantities refreshed", {
+        description: data
+          ? `${data.updated} item(s) updated${data.failed ? `, ${data.failed} failed` : ""}`
+          : undefined,
+      });
+      router.refresh();
+    });
+  };
 
   const handlePreview = () => {
     startPreview(async () => {
@@ -335,6 +357,16 @@ export function InventorySyncClient({
           <p className="text-muted-foreground">Push Katana stock levels to Reverb</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleRefresh}
+            disabled={isRefreshing || rows.length === 0}
+            title="Pull current Katana net-available and live Reverb quantities into the table. Read-only - nothing is pushed."
+          >
+            <RefreshCw className={cn("mr-2 size-4", isRefreshing && "animate-spin")} />
+            {isRefreshing ? "Refreshing..." : "Refresh quantities"}
+          </Button>
           <Button
             size="sm"
             variant="outline"
@@ -395,9 +427,10 @@ export function InventorySyncClient({
         This page keeps Reverb stock in line with Katana. For every mapped item it pushes the
         Katana <strong>net-available</strong> quantity (in stock minus committed) to the Reverb
         listing. When net-available reaches zero the listing is automatically unpublished, and
-        prices and listing content are never touched. <strong>Preview changes</strong> reads live
-        data and shows what would happen without writing anything; <strong>Apply sync</strong>{" "}
-        performs the writes (disabled while dry run is on).
+        prices and listing content are never touched. <strong>Refresh quantities</strong> pulls the
+        current Katana and Reverb numbers into the table without changing anything;{" "}
+        <strong>Preview changes</strong> reads live data and shows what would happen without writing
+        anything; <strong>Apply sync</strong> performs the writes (disabled while dry run is on).
       </PageIntro>
 
       {plan && <PreviewPanel plan={plan} onClose={() => setPlan(null)} />}

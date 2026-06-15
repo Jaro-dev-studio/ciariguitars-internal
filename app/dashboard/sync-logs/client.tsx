@@ -13,6 +13,7 @@ import {
   Eye,
   Bell,
   X,
+  FlaskConical,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -71,6 +72,7 @@ interface LogRow {
   newValue: string | null;
   errorMessage: string | null;
   details: string | null;
+  dryRun: boolean;
   createdAt: string;
 }
 
@@ -111,6 +113,7 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
     newValue: formatValue(log.newValue),
     errorMessage: log.errorMessage ?? null,
     details: log.details ?? null,
+    dryRun: log.dryRun ?? false,
     createdAt: typeof log.createdAt === "string" ? log.createdAt : new Date(log.createdAt).toISOString(),
   }));
 
@@ -390,7 +393,20 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                               <span className="text-muted-foreground">-</span>
                             )}
                           </TableCell>
-                          <TableCell>{getStatusBadge(log.status)}</TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap items-center gap-1">
+                              {getStatusBadge(log.status)}
+                              {log.dryRun && (
+                                <Badge
+                                  variant="outline"
+                                  className="gap-1 border-warning/40 bg-warning/10 text-warning"
+                                >
+                                  <FlaskConical className="size-3" />
+                                  Dry run
+                                </Badge>
+                              )}
+                            </div>
+                          </TableCell>
                           <TableCell>
                             <Button
                               variant="ghost"
@@ -503,9 +519,29 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Status</p>
-                  {getStatusBadge(selectedLog.status)}
+                  <div className="flex flex-wrap items-center gap-1">
+                    {getStatusBadge(selectedLog.status)}
+                    {selectedLog.dryRun && (
+                      <Badge
+                        variant="outline"
+                        className="gap-1 border-warning/40 bg-warning/10 text-warning"
+                      >
+                        <FlaskConical className="size-3" />
+                        Dry run
+                      </Badge>
+                    )}
+                  </div>
                 </div>
               </div>
+              {selectedLog.dryRun && (
+                <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm">
+                  <FlaskConical className="mt-0.5 size-4 shrink-0 text-warning" />
+                  <span>
+                    This was a <strong>dry run</strong> - it shows what would have happened, but no
+                    change was written to Katana or Reverb.
+                  </span>
+                </div>
+              )}
               {selectedLog.sku && (
                 <div>
                   <p className="text-sm text-muted-foreground">Item</p>

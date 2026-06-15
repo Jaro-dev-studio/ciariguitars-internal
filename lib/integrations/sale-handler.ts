@@ -131,6 +131,7 @@ export async function processReverbSale(
           direction: SyncDirection.INBOUND,
           inventoryItemId: mapping.inventoryItemId,
           newValue: { decrementBy: qty, variantId, orderNumber: order.order_number },
+          dryRun: true,
           details: `[dry-run] would decrement Katana variant ${variantId} by ${qty}`,
         });
       } else {

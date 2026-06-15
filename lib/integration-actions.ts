@@ -11,6 +11,7 @@ import { reverb } from "@/lib/integrations/reverb";
 import {
   runKatanaToReverbSync,
   previewKatanaToReverbSync,
+  refreshInventorySnapshot,
   type ReverbSyncPlan,
 } from "@/lib/integrations/inventory-sync";
 import { pollReverbOrders } from "@/lib/integrations/sale-handler";
@@ -169,6 +170,31 @@ export async function previewReverbSync(): Promise<{
     return {
       data: null,
       error: error instanceof Error ? error.message : "Preview failed",
+    };
+  }
+}
+
+export async function refreshInventorySnapshotNow(): Promise<{
+  data: Awaited<ReturnType<typeof refreshInventorySnapshot>> | null;
+  error: string | null;
+}> {
+  try {
+    const userId = await requireAuth();
+    if (!userId) return { data: null, error: "Not authenticated" };
+
+    console.log("[IntegrationActions] Inventory snapshot refresh requested (read-only)");
+    const locationId = process.env.KATANA_DEFAULT_LOCATION_ID;
+    const result = await refreshInventorySnapshot({
+      locationIds: locationId ? [Number(locationId)] : undefined,
+    });
+
+    revalidatePath("/dashboard/inventory-sync");
+    return { data: result, error: null };
+  } catch (error) {
+    console.error("[IntegrationActions] refreshInventorySnapshotNow failed:", error);
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "Refresh failed",
     };
   }
 }
