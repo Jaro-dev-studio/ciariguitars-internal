@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   RefreshCw,
   Sparkles,
+  Wand2,
   Info,
   ExternalLink,
 } from "lucide-react";
@@ -48,6 +49,7 @@ import {
   updateMapping,
   deleteMapping,
   autoSuggestMatches,
+  autoMatchByExactSku,
   type MappingRow,
   type UnmappedKatana,
   type UnmappedReverb,
@@ -210,6 +212,7 @@ export function SKUMappingClient({
   const [searchTerm, setSearchTerm] = useState("");
   const [isImporting, startImport] = useTransition();
   const [isSuggesting, startSuggest] = useTransition();
+  const [isMatching, startMatch] = useTransition();
   const [isSaving, startSave] = useTransition();
 
   const [addOpen, setAddOpen] = useState(false);
@@ -231,6 +234,8 @@ export function SKUMappingClient({
         (m.reverbSku ?? "").toLowerCase().includes(q)
     );
   }, [mappings, searchTerm]);
+
+  const reviewCount = useMemo(() => mappings.filter((m) => m.needsReview).length, [mappings]);
 
   const handleImport = () => {
     startImport(async () => {
@@ -257,6 +262,20 @@ export function SKUMappingClient({
       toast.success(`${data?.length ?? 0} suggestion(s)`, {
         description: "Review and accept the matches below",
       });
+    });
+  };
+
+  const handleAutoMatch = () => {
+    startMatch(async () => {
+      const { data, error } = await autoMatchByExactSku();
+      if (error) {
+        toast.error("Auto-match failed", { description: error });
+        return;
+      }
+      toast.success(`${data?.created ?? 0} mapping(s) created by exact SKU`, {
+        description: `${data?.ambiguous ?? 0} ambiguous, ${data?.skipped ?? 0} skipped`,
+      });
+      router.refresh();
     });
   };
 
@@ -374,6 +393,10 @@ export function SKUMappingClient({
             <RefreshCw className={cn("mr-2 size-4", isImporting && "animate-spin")} />
             {isImporting ? "Importing..." : "Import catalogs"}
           </Button>
+          <Button variant="outline" size="sm" onClick={handleAutoMatch} disabled={isMatching || notImported}>
+            <Wand2 className={cn("mr-2 size-4", isMatching && "animate-spin")} />
+            {isMatching ? "Matching..." : "Auto-match by SKU"}
+          </Button>
           <Button variant="outline" size="sm" onClick={handleSuggest} disabled={isSuggesting || notImported}>
             <Sparkles className={cn("mr-2 size-4", isSuggesting && "animate-spin")} />
             Auto-suggest
@@ -390,11 +413,13 @@ export function SKUMappingClient({
       </div>
 
       <PageIntro icon={Info}>
-        This is the foundation for every sync. Because Reverb SKUs and Katana SKUs do not match,
-        each Katana variant must be linked to its Reverb listing here. <strong>Import catalogs</strong>{" "}
-        pulls the latest variants and listings from both platforms, <strong>Auto-suggest</strong>{" "}
-        proposes likely matches you can accept, and you can add or edit mappings manually. Only
-        mapped items appear on the Inventory Sync page and are kept in sync.
+        This is the foundation for every sync, linking each Katana variant to its Reverb listing.{" "}
+        <strong>Import catalogs</strong> pulls the latest variants and listings from both platforms.{" "}
+        <strong>Auto-match by SKU</strong> links items whose Katana and Reverb SKUs are now identical
+        (the reliable path now that the client maintains canonical SKUs on Reverb).{" "}
+        <strong>Auto-suggest</strong> proposes fuzzy title matches for the rest, which you can accept
+        or add manually. Mappings flagged <strong>Review</strong> point at a Reverb listing that has
+        sold, ended, or had its SKU reassigned. Only mapped items are kept in sync.
       </PageIntro>
 
       {error && (
@@ -407,6 +432,17 @@ export function SKUMappingClient({
         <div className="rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
           No catalog data yet. Click <strong>Import catalogs</strong> to pull Katana
           variants and Reverb listings, then map them (or use Auto-suggest).
+        </div>
+      )}
+
+      {reviewCount > 0 && (
+        <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+          <span>
+            <strong>{reviewCount} mapping(s) need review.</strong> Their Reverb listing has sold,
+            ended, or had its SKU reassigned. Re-import catalogs, then edit or remove these so syncs
+            target a live listing.
+          </span>
         </div>
       )}
 
@@ -513,11 +549,22 @@ export function SKUMappingClient({
                       </TableCell>
                       <TableCell className="max-w-[280px]">
                         {m.reverbListingId ? (
-                          <div className="flex min-w-0 items-center gap-1">
-                            <CheckCircle2 className="size-3.5 shrink-0 text-accent" />
-                            <TitleLink href={reverbItemUrl(m.reverbListingId)} className="text-xs">
-                              {m.reverbTitle ?? m.reverbListingId}
-                            </TitleLink>
+                          <div className="flex min-w-0 flex-col gap-1">
+                            <div className="flex min-w-0 items-center gap-1">
+                              {m.needsReview ? (
+                                <AlertTriangle className="size-3.5 shrink-0 text-warning" />
+                              ) : (
+                                <CheckCircle2 className="size-3.5 shrink-0 text-accent" />
+                              )}
+                              <TitleLink href={reverbItemUrl(m.reverbListingId)} className="text-xs">
+                                {m.reverbTitle ?? m.reverbListingId}
+                              </TitleLink>
+                            </div>
+                            {m.needsReview && m.reviewReason && (
+                              <Badge variant="outline" className="w-fit border-warning/40 text-xs text-warning">
+                                Review: {m.reviewReason}
+                              </Badge>
+                            )}
                           </div>
                         ) : (
                           <span className="flex items-center gap-1 text-muted-foreground">

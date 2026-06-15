@@ -1,0 +1,53 @@
+name: Sync Internal Repo to Client Repo
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  CLIENT_REPO_URL: "https://${{ secrets.JAROSTAZ_PAT_CIARI }}@github.com/CiariGuitars/CiariSync"
+
+jobs:
+  sync-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Internal Repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Fetch full history for meaningful diffs
+
+      - name: Clone Client Repo
+        run: |
+          git clone "$CLIENT_REPO_URL" ../client-repo
+      - name: Pull Latest Changes from dev branch
+        run: |
+          cd ../client-repo
+          git checkout dev || git checkout -b dev
+          git pull origin dev --ff-only || echo "No remote branch found, continuing..."
+      - name: Get last commit hash in client repo
+        run: |
+          cd ../client-repo
+          LAST_SYNC_COMMIT=$(git rev-parse HEAD)
+          echo "LAST_SYNC_COMMIT=$LAST_SYNC_COMMIT" >> $GITHUB_ENV
+      - name: Copy Changes and Check for Updates
+        run: |
+          rsync -a --delete --exclude='.git' --exclude='.github/workflows' ./ ../client-repo/
+          cd ../client-repo
+          git add .
+
+          # Check if there are actual changes
+          if git diff --cached --quiet; then
+            echo "No changes to commit. Exiting."
+            exit 0
+          fi
+      - name: Commit and Push Changes to dev Branch
+        run: |
+          cd ../client-repo
+          # Configure Git identity
+          git config --global user.email "24418207+Jarostaz@users.noreply.github.com"
+          git config --global user.name "Jarostaz"
+          # Commit changes with static message
+          git commit -m "Updated project files" --author="Jarostaz <24418207+Jarostaz@users.noreply.github.com>"
+          # Push changes to dev
+          git push origin dev

@@ -356,6 +356,9 @@ model SyncLog {
   errorMessage  String?
   details       String? @db.Text
 
+  // True when this entry was produced by a dry run (no real write happened).
+  dryRun        Boolean @default(false)
+
   resolvedAt    DateTime?
   resolvedBy    String?
 
@@ -626,6 +629,9 @@ model ReverbCatalogListing {
   state        String?
   inventory    Int?
   sku          String?
+  // Reverb "unique" (one-of-a-kind) listings have has_inventory = false. We
+  // ignore these for sync/mapping. Null = unknown (re-import to populate).
+  hasInventory Boolean?
 
   lastImportedAt DateTime @default(now())
 

@@ -144,13 +144,14 @@ class ReverbClient {
   }
 
   async ping(): Promise<{ ok: boolean; shopName?: string; error?: string }> {
+    // Validate the token against an endpoint our read-only scope can reach.
+    // /my/account requires extra scopes the listings token does not carry, so
+    // hitting /my/listings both verifies auth and matches what we actually use.
     try {
-      const me = await this.request<{
-        shop?: { name?: string };
-        first_name?: string;
-        email?: string;
-      }>("/my/account");
-      return { ok: true, shopName: me.shop?.name ?? me.first_name ?? me.email };
+      await this.request<ReverbListingsResponse>(
+        "/my/listings?per_page=1&state=all"
+      );
+      return { ok: true };
     } catch (error) {
       return {
         ok: false,
