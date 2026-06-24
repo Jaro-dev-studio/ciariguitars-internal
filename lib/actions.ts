@@ -205,6 +205,65 @@ export async function cloneCalculation(id: string) {
 // USER ACTIONS
 // ============================================
 
+export async function registerUser(data: {
+  email: string;
+  password: string;
+  firstName?: string;
+  lastName?: string;
+}) {
+  try {
+    console.log("[Signup] Validating input for:", data.email);
+
+    const email = data.email.trim().toLowerCase();
+
+    if (!email || !email.includes("@")) {
+      return { data: null, error: "Please enter a valid email address" };
+    }
+
+    if (!data.password || data.password.length < 8) {
+      return { data: null, error: "Password must be at least 8 characters" };
+    }
+
+    console.log("[Signup] Checking for existing account…");
+
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      return { data: null, error: "An account with this email already exists" };
+    }
+
+    console.log("[Signup] Hashing password and creating account…");
+
+    const hashedPassword = await bcrypt.hash(data.password, 10);
+
+    const user = await prisma.user.create({
+      data: {
+        email,
+        password: hashedPassword,
+        firstName: data.firstName?.trim() || null,
+        lastName: data.lastName?.trim() || null,
+      },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    console.log("[Signup] Account created:", user.id);
+
+    revalidatePath("/dashboard/users");
+    return { data: { user }, error: null };
+  } catch (error) {
+    console.error("[Signup] Error creating account:", error);
+    return { data: null, error: "Failed to create account" };
+  }
+}
+
 export async function createUser(data: { email: string; role?: UserRole }) {
   try {
     const currentUserId = await getCurrentUserId();
