@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "dev": "open -a Postgres && next dev",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --fix --ext .js,.jsx,.ts,.tsx .",

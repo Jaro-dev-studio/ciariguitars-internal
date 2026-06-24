@@ -112,13 +112,30 @@ function buildResolved(item: ItemWithMappings): ResolvedMapping {
  * coverage gaps elsewhere.
  */
 export async function listSyncableItems(): Promise<ResolvedMapping[]> {
-  const items = await prisma.inventoryItem.findMany({
-    include: { skuMappings: true },
-  });
+  const [items, uniqueListings] = await Promise.all([
+    prisma.inventoryItem.findMany({
+      include: { skuMappings: true },
+    }),
+    // Reverb "unique" (one-of-a-kind) listings have has_inventory = false and
+    // must never be touched by live sync. Null = unknown, so it stays syncable.
+    prisma.reverbCatalogListing.findMany({
+      where: { hasInventory: false },
+      select: { listingId: true },
+    }),
+  ]);
+
+  const excludedReverbListingIds = new Set(
+    uniqueListings.map((l) => l.listingId)
+  );
 
   return items
     .map(buildResolved)
-    .filter((r) => r.katanaVariantId !== null && r.reverbListingId !== null);
+    .filter(
+      (r) =>
+        r.katanaVariantId !== null &&
+        r.reverbListingId !== null &&
+        !excludedReverbListingIds.has(r.reverbListingId)
+    );
 }
 
 export async function listCoverageGaps(): Promise<{
