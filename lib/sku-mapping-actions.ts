@@ -13,7 +13,7 @@ import { computeMappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
 import type { MappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
 
 export type { ExactMatchResultItem } from "@/lib/sku-mapping-core";
-export type { MappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
+export type { MappingDiagnostics, MappingConflict } from "@/lib/sku-mapping-diagnostics";
 
 async function requireAuth(): Promise<string | null> {
   const session = await getServerSession(authOptions);
@@ -406,6 +406,91 @@ export async function updateMapping(input: {
   }
 }
 
+/**
+ * Fixes a mis-mapping surfaced by diagnostics: a Reverb listing whose SKU
+ * actually belongs to `katanaVariantId` is currently linked to a different
+ * inventory item. This detaches the listing from its current owner (leaving the
+ * owner's Katana side intact) and links it to the correct Katana variant.
+ */
+export async function reassignReverbListing(input: {
+  reverbListingId: string;
+  katanaVariantId: string;
+}): Promise<{ data: { inventoryItemId: string } | null; error: string | null }> {
+  try {
+    const userId = await requireAuth();
+    if (!userId) return { data: null, error: "Not authenticated" };
+
+    console.log(
+      `[SKUMapping] Reassigning reverb=${input.reverbListingId} to katana=${input.katanaVariantId}`
+    );
+
+    const [katanaVariant, reverbListing] = await Promise.all([
+      prisma.katanaCatalogVariant.findUnique({ where: { variantId: input.katanaVariantId } }),
+      prisma.reverbCatalogListing.findUnique({ where: { listingId: input.reverbListingId } }),
+    ]);
+    if (!katanaVariant) return { data: null, error: "Katana variant not found in staging" };
+    if (!reverbListing) return { data: null, error: "Reverb listing not found in staging" };
+
+    const canonicalSku = katanaVariant.sku || `KAT-${katanaVariant.variantId}`;
+
+    console.log("[SKUMapping] Reassign: verifying target Katana SKU is free...");
+    const existingKatana = await prisma.sKUMapping.findUnique({
+      where: {
+        platform_externalSku: {
+          platform: IntegrationPlatform.KATANA,
+          externalSku: canonicalSku,
+        },
+      },
+    });
+    if (existingKatana) {
+      return { data: null, error: `Katana SKU ${canonicalSku} is already mapped` };
+    }
+
+    console.log("[SKUMapping] Reassign: detaching listing from its current owner...");
+    await prisma.sKUMapping.deleteMany({
+      where: { platform: IntegrationPlatform.REVERB, externalId: input.reverbListingId },
+    });
+
+    const reverbExternalSku = reverbListing.sku || `rev-${reverbListing.listingId}`;
+
+    console.log("[SKUMapping] Reassign: creating corrected mapping...");
+    const item = await prisma.inventoryItem.create({
+      data: {
+        sku: canonicalSku,
+        name: katanaVariant.productName,
+        skuMappings: {
+          create: [
+            {
+              platform: IntegrationPlatform.KATANA,
+              externalSku: canonicalSku,
+              externalId: katanaVariant.variantId,
+              externalName: katanaVariant.productName,
+              isActive: true,
+            },
+            {
+              platform: IntegrationPlatform.REVERB,
+              externalSku: reverbExternalSku,
+              externalId: reverbListing.listingId,
+              externalName: reverbListing.title,
+              isActive: true,
+            },
+          ],
+        },
+      },
+    });
+
+    revalidatePath("/dashboard/sku-mapping");
+    revalidatePath("/dashboard/debug-mappings");
+    return { data: { inventoryItemId: item.id }, error: null };
+  } catch (error) {
+    console.error("[SKUMapping] reassignReverbListing failed:", error);
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "Failed to reassign listing",
+    };
+  }
+}
+
 export async function deleteMapping(inventoryItemId: string): Promise<{
   data: boolean | null;
   error: string | null;
@@ -418,6 +503,7 @@ export async function deleteMapping(inventoryItemId: string): Promise<{
     await prisma.inventoryItem.delete({ where: { id: inventoryItemId } });
 
     revalidatePath("/dashboard/sku-mapping");
+    revalidatePath("/dashboard/debug-mappings");
     return { data: true, error: null };
   } catch (error) {
     console.error("[SKUMapping] deleteMapping failed:", error);

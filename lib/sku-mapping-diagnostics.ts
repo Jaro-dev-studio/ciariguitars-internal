@@ -9,6 +9,28 @@ export interface DiagnosticDuplicate {
   variantCount: number;
 }
 
+/**
+ * An unmapped Katana SKU whose matching, in-stock Reverb listing is already
+ * linked to a *different* inventory item. These are the concrete, fixable
+ * mis-mappings: the listing's SKU actually belongs to `katanaSku`, but it was
+ * mapped to `ownerKatanaSku`. Surfacing the owner lets an admin re-point it.
+ */
+export interface MappingConflict {
+  katanaVariantId: string;
+  katanaSku: string;
+  katanaProductId: string | null;
+  katanaProductName: string;
+  reverbListingId: string;
+  reverbTitle: string;
+  reverbSku: string | null;
+  reverbState: string | null;
+  ownerInventoryItemId: string;
+  ownerName: string | null;
+  ownerCanonicalSku: string | null;
+  ownerKatanaSku: string | null;
+  ownerKatanaProductId: string | null;
+}
+
 export interface MappingDiagnostics {
   generatedAt: string;
   katana: {
@@ -39,11 +61,13 @@ export interface MappingDiagnostics {
     noReverbListing: number;
     onlySoldEnded: number;
     uniqueExcludedMatch: number;
+    blockedByMapping: number;
     ambiguous: number;
   };
   noReverbSkus: string[];
   soldEndedSkus: string[];
   reverbSkusWithoutKatana: string[];
+  conflicts: MappingConflict[];
 }
 
 function group<T>(items: T[], key: (i: T) => string | null): Map<string, T[]> {
@@ -93,6 +117,25 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
       .filter((m) => m.platform === IntegrationPlatform.KATANA)
       .map((m) => m.externalSku)
   );
+  // Reverb listings already linked to some item. The matcher excludes these
+  // from the candidate pool, so the diagnostics must too or readyToMap will
+  // over-count matches that Sync silently skips.
+  const reverbMappingByListingId = new Map(
+    mappings
+      .filter((m) => m.platform === IntegrationPlatform.REVERB && m.externalId)
+      .map((m) => [m.externalId as string, m])
+  );
+  const mappedReverbListingIds = new Set(reverbMappingByListingId.keys());
+  const katanaMappingByItemId = new Map(
+    mappings
+      .filter((m) => m.platform === IntegrationPlatform.KATANA)
+      .map((m) => [m.inventoryItemId, m])
+  );
+  const productIdByVariantId = new Map(katana.map((v) => [v.variantId, v.productId]));
+
+  // Group ALL Reverb listings by normalized SKU (matching the core matcher),
+  // then apply the same eligibility filter (in stock + not already mapped).
+  const reverbByNormSkuAll = group(reverb, (l) => (l.sku ? normalizeSku(l.sku) : null));
 
   console.log("[MappingDiagnostics] Classifying every distinct Katana SKU...");
   const classification = {
@@ -101,27 +144,72 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
     noReverbListing: 0,
     onlySoldEnded: 0,
     uniqueExcludedMatch: 0,
+    blockedByMapping: 0,
     ambiguous: 0,
   };
   const noReverbSkus: string[] = [];
   const soldEndedSkus: string[] = [];
+  const conflicts: MappingConflict[] = [];
 
-  const reverbNormSkusWithAnyListing = new Set(
-    reverb.map((l) => (l.sku ? normalizeSku(l.sku) : "")).filter(Boolean)
-  );
-
-  for (const [sku] of katanaBySku) {
+  for (const [sku, variants] of katanaBySku) {
     if (mappedKatanaSkus.has(sku)) {
       classification.mappedLive++;
       continue;
     }
-    const candidates = reverbBySku.get(normalizeSku(sku)) ?? [];
+    const all = reverbByNormSkuAll.get(normalizeSku(sku)) ?? [];
+    // Mirror the matcher: only in-stock listings not already mapped elsewhere.
+    const candidates = all.filter(
+      (l) => l.hasInventory !== false && !mappedReverbListingIds.has(l.listingId)
+    );
+
+    // Detect concrete mis-mappings: an in-stock, live/draft listing whose SKU
+    // matches this unmapped Katana SKU but is already claimed by another item.
+    const blockedListings = all.filter(
+      (l) =>
+        l.hasInventory !== false &&
+        (l.state === "live" || l.state === "draft") &&
+        mappedReverbListingIds.has(l.listingId)
+    );
+    if (blockedListings.length > 0 && candidates.length === 0) {
+      const wanted = variants[0];
+      for (const listing of blockedListings) {
+        const reverbMapping = reverbMappingByListingId.get(listing.listingId);
+        const ownerItemId = reverbMapping?.inventoryItemId ?? null;
+        const ownerKatana = ownerItemId ? katanaMappingByItemId.get(ownerItemId) : undefined;
+        if (!ownerItemId) continue;
+        conflicts.push({
+          katanaVariantId: wanted.variantId,
+          katanaSku: sku,
+          katanaProductId: wanted.productId,
+          katanaProductName: wanted.productName,
+          reverbListingId: listing.listingId,
+          reverbTitle: listing.title,
+          reverbSku: listing.sku,
+          reverbState: listing.state,
+          ownerInventoryItemId: ownerItemId,
+          ownerName: ownerKatana?.externalName ?? null,
+          ownerCanonicalSku: ownerKatana?.externalSku ?? null,
+          ownerKatanaSku: ownerKatana?.externalSku ?? null,
+          ownerKatanaProductId: ownerKatana?.externalId
+            ? productIdByVariantId.get(ownerKatana.externalId) ?? null
+            : null,
+        });
+      }
+    }
+
     if (candidates.length === 0) {
-      if (reverbNormSkusWithAnyListing.has(normalizeSku(sku))) {
-        classification.uniqueExcludedMatch++;
-      } else {
+      if (all.length === 0) {
         classification.noReverbListing++;
         noReverbSkus.push(sku);
+      } else if (all.every((l) => l.hasInventory === false)) {
+        classification.uniqueExcludedMatch++;
+      } else if (blockedListings.length > 0) {
+        // A matching live/draft listing exists but is mapped to another item.
+        classification.blockedByMapping++;
+      } else {
+        // Listing(s) exist but are sold/ended.
+        classification.onlySoldEnded++;
+        soldEndedSkus.push(sku);
       }
       continue;
     }
@@ -152,7 +240,7 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
   const currentCatalogMapped = classification.mappedLive;
 
   console.log(
-    `[MappingDiagnostics] Done. mapped=${mappedKatanaSkus.size}, readyToMap=${classification.readyToMap}, noReverb=${noReverbSkus.length}`
+    `[MappingDiagnostics] Done. mapped=${mappedKatanaSkus.size}, readyToMap=${classification.readyToMap}, noReverb=${noReverbSkus.length}, conflicts=${conflicts.length}`
   );
 
   return {
@@ -183,5 +271,6 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
     noReverbSkus,
     soldEndedSkus,
     reverbSkusWithoutKatana,
+    conflicts,
   };
 }

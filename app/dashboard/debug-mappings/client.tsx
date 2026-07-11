@@ -10,13 +10,32 @@ import {
   Link2,
   Boxes,
   ExternalLink,
+  Wrench,
+  Trash2,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { PageIntro } from "@/components/page-intro";
-import { runMappingDiagnostics, type MappingDiagnostics } from "@/lib/sku-mapping-actions";
+import {
+  runMappingDiagnostics,
+  reassignReverbListing,
+  deleteMapping,
+  type MappingDiagnostics,
+  type MappingConflict,
+} from "@/lib/sku-mapping-actions";
+
+const KATANA_APP_BASE =
+  process.env.NEXT_PUBLIC_KATANA_APP_BASE_URL || "https://factory.katanamrp.com";
+
+function reverbItemUrl(listingId: string): string {
+  return `https://reverb.com/item/${listingId}`;
+}
+
+function katanaProductUrl(productId: string | null): string | null {
+  return productId ? `${KATANA_APP_BASE}/items/products/${productId}` : null;
+}
 
 interface DebugMappingsClientProps {
   initialData: MappingDiagnostics | null;
@@ -34,6 +53,7 @@ const BUCKET_META: {
   { key: "noReverbListing", label: "No Reverb listing for SKU", tone: "text-muted-foreground", bar: "bg-muted-foreground/50" },
   { key: "onlySoldEnded", label: "Only sold / ended listings", tone: "text-warning", bar: "bg-warning" },
   { key: "uniqueExcludedMatch", label: "Matched listing is one-of-a-kind", tone: "text-warning", bar: "bg-warning/60" },
+  { key: "blockedByMapping", label: "Blocked (listing mapped to another item)", tone: "text-destructive", bar: "bg-destructive/70" },
   { key: "ambiguous", label: "Ambiguous (multiple live share SKU)", tone: "text-destructive", bar: "bg-destructive" },
 ];
 
@@ -78,24 +98,163 @@ function SkuChips({ skus }: { skus: string[] }) {
   );
 }
 
+function SkuLink({
+  sku,
+  href,
+  tone,
+}: {
+  sku: string | null;
+  href: string | null;
+  tone?: string;
+}) {
+  const label = sku || "(no SKU)";
+  const cls = cn(
+    "inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 font-mono text-xs",
+    tone ?? "bg-muted"
+  );
+  if (!href) return <code className={cls}>{label}</code>;
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className={cn(cls, "hover:underline")}>
+      <span className="truncate">{label}</span>
+      <ExternalLink className="size-3 shrink-0" />
+    </a>
+  );
+}
+
+function ConflictItem({
+  conflict,
+  busy,
+  onReassign,
+  onRemove,
+}: {
+  conflict: MappingConflict;
+  busy: boolean;
+  onReassign: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="rounded-lg border p-4">
+      <div className="flex flex-col gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+          <span className="text-muted-foreground">Reverb listing</span>
+          <SkuLink
+            sku={conflict.reverbSku}
+            href={reverbItemUrl(conflict.reverbListingId)}
+            tone="bg-primary/10 text-primary"
+          />
+          {conflict.reverbState && (
+            <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+              {conflict.reverbState}
+            </span>
+          )}
+        </div>
+        <p className="truncate text-sm font-medium">{conflict.reverbTitle}</p>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="border-accent/30 bg-accent/5 min-w-0 rounded-md border p-3">
+            <p className="text-accent mb-1.5 text-xs font-medium">Should map to (unmapped)</p>
+            <SkuLink
+              sku={conflict.katanaSku}
+              href={katanaProductUrl(conflict.katanaProductId)}
+              tone="bg-accent/10 text-accent"
+            />
+            <p className="mt-1 truncate text-xs text-muted-foreground">
+              {conflict.katanaProductName}
+            </p>
+          </div>
+          <div className="border-destructive/30 bg-destructive/5 min-w-0 rounded-md border p-3">
+            <p className="mb-1.5 text-xs font-medium text-destructive">Currently mapped to</p>
+            <SkuLink
+              sku={conflict.ownerKatanaSku}
+              href={katanaProductUrl(conflict.ownerKatanaProductId)}
+              tone="bg-destructive/10 text-destructive"
+            />
+            <p className="mt-1 truncate text-xs text-muted-foreground">
+              {conflict.ownerName ?? conflict.ownerCanonicalSku ?? "Unknown item"}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={onReassign} disabled={busy}>
+            <Wrench className="mr-2 size-4" />
+            Reassign to {conflict.katanaSku}
+          </Button>
+          <Button size="sm" variant="outline" onClick={onRemove} disabled={busy}>
+            <Trash2 className="mr-2 size-4" />
+            Remove wrong mapping
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function DebugMappingsClient({ initialData, initialError }: DebugMappingsClientProps) {
   const [data, setData] = useState<MappingDiagnostics | null>(initialData);
   const [error, setError] = useState<string | null>(initialError);
   const [isRunning, startRun] = useTransition();
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  const refreshData = async () => {
+    const result = await runMappingDiagnostics();
+    if (result.error || !result.data) {
+      setError(result.error ?? "Diagnostics failed");
+      toast.error("Diagnostics failed", { description: result.error ?? undefined });
+      return;
+    }
+    setData(result.data);
+    setError(null);
+    return result.data;
+  };
 
   const handleRerun = () => {
     startRun(async () => {
-      const result = await runMappingDiagnostics();
+      const fresh = await refreshData();
+      if (fresh) {
+        toast.success("Diagnostics refreshed", {
+          description: `${fresh.mappings.total} mapped of ${fresh.katana.totalVariants} Katana variants`,
+        });
+      }
+    });
+  };
+
+  const handleReassign = (conflict: MappingConflict) => {
+    const key = `${conflict.reverbListingId}:reassign`;
+    setBusyKey(key);
+    startRun(async () => {
+      const result = await reassignReverbListing({
+        reverbListingId: conflict.reverbListingId,
+        katanaVariantId: conflict.katanaVariantId,
+      });
       if (result.error || !result.data) {
-        setError(result.error ?? "Diagnostics failed");
-        toast.error("Diagnostics failed", { description: result.error ?? undefined });
+        toast.error("Reassign failed", { description: result.error ?? undefined });
+        setBusyKey(null);
         return;
       }
-      setData(result.data);
-      setError(null);
-      toast.success("Diagnostics refreshed", {
-        description: `${result.data.mappings.total} mapped of ${result.data.katana.totalVariants} Katana variants`,
+      toast.success("Listing reassigned", {
+        description: `${conflict.reverbSku ?? conflict.reverbListingId} now maps to ${conflict.katanaSku}`,
       });
+      await refreshData();
+      setBusyKey(null);
+    });
+  };
+
+  const handleRemove = (conflict: MappingConflict) => {
+    const key = `${conflict.reverbListingId}:remove`;
+    setBusyKey(key);
+    startRun(async () => {
+      const result = await deleteMapping(conflict.ownerInventoryItemId);
+      if (result.error || !result.data) {
+        toast.error("Remove failed", { description: result.error ?? undefined });
+        setBusyKey(null);
+        return;
+      }
+      toast.success("Wrong mapping removed", {
+        description: `Freed ${conflict.reverbSku ?? conflict.reverbListingId} - re-sync to map it correctly`,
+      });
+      await refreshData();
+      setBusyKey(null);
     });
   };
 
@@ -103,7 +262,8 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
     data &&
     data.katana.blankSku === 0 &&
     data.katana.duplicateSkuCount === 0 &&
-    data.classification.ambiguous === 0;
+    data.classification.ambiguous === 0 &&
+    data.conflicts.length === 0;
 
   const recoverable = data ? data.classification.readyToMap : 0;
 
@@ -156,7 +316,8 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
               <span>
                 <strong>Data quality issues detected.</strong> {data.katana.blankSku} blank SKUs,{" "}
                 {data.katana.duplicateSkuCount} duplicate Katana SKUs, {data.classification.ambiguous}{" "}
-                ambiguous collisions. See the breakdown below.
+                ambiguous collisions, {data.conflicts.length} fixable mis-mappings. See the breakdown
+                below.
               </span>
             </div>
           )}
@@ -176,6 +337,39 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
                 <strong>Sync mappings</strong> on the SKU Mapping page to create them.
               </span>
             </div>
+          )}
+
+          {/* Mis-mappings (blocked by an existing mapping) */}
+          {data.conflicts.length > 0 && (
+            <Card className="border-destructive/30">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Wrench className="size-5 text-destructive" />
+                  Fixable mis-mappings ({data.conflicts.length})
+                </CardTitle>
+                <CardDescription>
+                  Each Reverb listing below has a SKU that matches an <strong>unmapped</strong> Katana
+                  variant, but it is currently linked to a different item - so the correct SKU can
+                  never map on Sync. Open either platform to confirm, then{" "}
+                  <strong>Reassign</strong> to re-point the listing to the correct Katana SKU, or{" "}
+                  <strong>Remove wrong mapping</strong> to detach it and let the next Sync re-match.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {data.conflicts.map((conflict) => (
+                  <ConflictItem
+                    key={`${conflict.reverbListingId}-${conflict.katanaVariantId}`}
+                    conflict={conflict}
+                    busy={
+                      busyKey === `${conflict.reverbListingId}:reassign` ||
+                      busyKey === `${conflict.reverbListingId}:remove`
+                    }
+                    onReassign={() => handleReassign(conflict)}
+                    onRemove={() => handleRemove(conflict)}
+                  />
+                ))}
+              </CardContent>
+            </Card>
           )}
 
           {/* Pool ceiling */}
