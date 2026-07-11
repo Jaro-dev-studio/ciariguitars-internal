@@ -9,20 +9,10 @@ import {
   XCircle,
   Link2,
   Boxes,
-  Bug,
   ExternalLink,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { PageIntro } from "@/components/page-intro";
@@ -115,7 +105,6 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
     data.katana.duplicateSkuCount === 0 &&
     data.classification.ambiguous === 0;
 
-  const autoCorrectedBlocking = data ? data.typos.filter((t) => t.blocksUnmapped).length : 0;
   const recoverable = data ? data.classification.readyToMap : 0;
 
   return (
@@ -184,15 +173,7 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
               <Info className="mt-0.5 size-4 shrink-0 text-primary" />
               <span>
                 <strong>Quick win: {recoverable} more will map on the next Sync.</strong> Run{" "}
-                <strong>Sync mappings</strong> on the SKU Mapping page to create them
-                {autoCorrectedBlocking > 0 && (
-                  <>
-                    {" "}
-                    (including {autoCorrectedBlocking} whose stray dash is now auto-corrected - no
-                    Reverb edit needed)
-                  </>
-                )}
-                .
+                <strong>Sync mappings</strong> on the SKU Mapping page to create them.
               </span>
             </div>
           )}
@@ -259,58 +240,6 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
                   are mapped.
                 </p>
               )}
-            </CardContent>
-          </Card>
-
-          {/* Typos */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="flex items-center gap-2 text-lg">
-                <Bug className="size-4" /> Auto-corrected SKU mismatches (stray dash)
-              </CardTitle>
-              <CardDescription>
-                Listings with a matching SKU but a stray leading/trailing dash. The matcher now strips
-                the dash automatically, so these map without editing Reverb - cleaning them up on
-                Reverb is still tidier.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Reverb SKU (as entered)</TableHead>
-                      <TableHead>Matched Katana SKU</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {data.typos.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={3} className="py-6 text-center text-muted-foreground">
-                          No dash mismatches detected
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      data.typos.map((t) => (
-                        <TableRow key={t.reverbSku}>
-                          <TableCell className="font-mono text-xs">{t.reverbSku}</TableCell>
-                          <TableCell className="font-mono text-xs">{t.suggested}</TableCell>
-                          <TableCell className="text-sm">
-                            {t.blocksUnmapped ? (
-                              <Badge variant="outline" className="border-primary/40 text-primary">
-                                Will map on next Sync (+1)
-                              </Badge>
-                            ) : (
-                              <span className="text-muted-foreground">Already mapped</span>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
             </CardContent>
           </Card>
 

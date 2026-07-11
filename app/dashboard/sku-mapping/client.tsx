@@ -870,30 +870,30 @@ export function SKUMappingClient({
                 filteredDetailItems.map((item) => (
                   <div
                     key={item.key}
-                    className="flex min-w-0 flex-col gap-0.5 border-b px-3 py-2 last:border-b-0"
+                    className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-b px-3 py-2 last:border-b-0"
                   >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <TitleLink href={item.primaryHref} className="min-w-0 flex-1 text-sm font-medium">
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <TitleLink href={item.primaryHref} className="text-sm font-medium">
                         {item.primary}
                       </TitleLink>
-                      {item.badge && (
-                        <Badge
-                          variant="outline"
-                          className={cn(
-                            "shrink-0 text-xs",
-                            item.badge.warning ? "border-warning/40 text-warning" : "text-accent"
-                          )}
-                        >
-                          {item.badge.label}
-                        </Badge>
-                      )}
+                      <TitleLink
+                        href={item.secondaryHref}
+                        className="font-mono text-xs text-muted-foreground"
+                      >
+                        {item.secondary}
+                      </TitleLink>
                     </div>
-                    <TitleLink
-                      href={item.secondaryHref}
-                      className="min-w-0 font-mono text-xs text-muted-foreground"
-                    >
-                      {item.secondary}
-                    </TitleLink>
+                    {item.badge && (
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "justify-self-end text-xs",
+                          item.badge.warning ? "border-warning/40 text-warning" : "text-accent"
+                        )}
+                      >
+                        {item.badge.label}
+                      </Badge>
+                    )}
                   </div>
                 ))
               )}

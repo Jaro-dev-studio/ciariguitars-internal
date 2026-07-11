@@ -4,14 +4,6 @@ import { IntegrationPlatform } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { normalizeSku } from "@/lib/sku-mapping-core";
 
-export interface DiagnosticTypo {
-  reverbSku: string;
-  suggested: string;
-  /** True when its Katana counterpart is not yet mapped, so re-running Sync
-   * will create a new mapping now that the dash is auto-stripped. */
-  blocksUnmapped: boolean;
-}
-
 export interface DiagnosticDuplicate {
   sku: string;
   variantCount: number;
@@ -49,7 +41,6 @@ export interface MappingDiagnostics {
     uniqueExcludedMatch: number;
     ambiguous: number;
   };
-  typos: DiagnosticTypo[];
   noReverbSkus: string[];
   soldEndedSkus: string[];
   reverbSkusWithoutKatana: string[];
@@ -145,26 +136,13 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
     }
   }
 
-  console.log("[MappingDiagnostics] Detecting stray-dash SKUs the matcher auto-corrects...");
+  console.log("[MappingDiagnostics] Collecting genuinely unmatched Reverb SKUs...");
   const katanaNorm = new Map<string, string>();
   for (const s of katanaBySku.keys()) katanaNorm.set(normalizeSku(s), s);
 
   const distinctRawSyncableSkus = [
     ...new Set(syncableWithSku.map((l) => l.sku).filter((s): s is string => Boolean(s))),
   ];
-
-  // Raw Reverb SKUs that only match a Katana SKU once normalized (stray dash),
-  // i.e. the matcher now auto-corrects them.
-  const typos: DiagnosticTypo[] = distinctRawSyncableSkus
-    .map((raw) => {
-      const suggested = katanaNorm.get(normalizeSku(raw)) ?? null;
-      return {
-        reverbSku: raw,
-        suggested,
-        blocksUnmapped: suggested ? !mappedKatanaSkus.has(suggested) : false,
-      };
-    })
-    .filter((x): x is DiagnosticTypo => Boolean(x.suggested) && x.suggested !== x.reverbSku);
 
   // Genuinely unmatched syncable SKUs (no Katana match even after normalizing).
   const reverbSkusWithoutKatana = distinctRawSyncableSkus.filter(
@@ -174,7 +152,7 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
   const currentCatalogMapped = classification.mappedLive;
 
   console.log(
-    `[MappingDiagnostics] Done. mapped=${mappedKatanaSkus.size}, typos=${typos.length}, noReverb=${noReverbSkus.length}`
+    `[MappingDiagnostics] Done. mapped=${mappedKatanaSkus.size}, readyToMap=${classification.readyToMap}, noReverb=${noReverbSkus.length}`
   );
 
   return {
@@ -202,7 +180,6 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
       staleRows: mappedKatanaSkus.size - currentCatalogMapped,
     },
     classification,
-    typos,
     noReverbSkus,
     soldEndedSkus,
     reverbSkusWithoutKatana,
