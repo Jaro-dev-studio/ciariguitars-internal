@@ -613,13 +613,14 @@ export async function fetchSyncLogs(filters?: {
 // ALERTS
 // ============================================
 
-export async function fetchAlerts(showDismissed = false) {
+export async function fetchAlerts(showDismissed = false, take = 200) {
   try {
     console.log("[Alerts] Fetching alerts...");
     
     const alerts = await prisma.alert.findMany({
       where: showDismissed ? {} : { isDismissed: false },
-      orderBy: [{ severity: "desc" }, { createdAt: "desc" }],
+      orderBy: [{ severity: "desc" }, { updatedAt: "desc" }],
+      take,
     });
 
     console.log("[Alerts] Fetched", alerts.length, "alerts");

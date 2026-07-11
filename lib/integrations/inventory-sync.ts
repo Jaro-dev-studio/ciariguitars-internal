@@ -13,7 +13,7 @@ import { getIntegrationConfig } from "./config";
 import { katana, netAvailable, type KatanaInventory } from "./katana";
 import { reverb, type ReverbListing } from "./reverb";
 import { listSyncableItems } from "./sku-resolver";
-import { recordSyncLog, recordAlert, touchIntegrationLastSync } from "./sync-logger";
+import { recordSyncLog, recordAlert, clearAlerts, touchIntegrationLastSync } from "./sync-logger";
 
 export interface ReverbSyncItemResult {
   canonicalSku: string;
@@ -95,6 +95,12 @@ export async function runKatanaToReverbSync(options: {
       limit: 250,
     });
     inventoryByVariant = aggregateInventory(inventory);
+    // Recovery: the batch fetch succeeded, so clear any prior fetch-failure alert.
+    await clearAlerts({
+      type: AlertType.CONNECTION_ERROR,
+      relatedPlatform: IntegrationPlatform.KATANA,
+      relatedSku: null,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Unknown error";
     console.error("[ReverbSync] Failed to fetch Katana inventory:", msg);
@@ -230,6 +236,17 @@ export async function runKatanaToReverbSync(options: {
           lastKatanaSyncAt: new Date(),
         },
       }).catch((e) => console.error("[ReverbSync] local cache update failed:", e));
+
+      // Recovery: this SKU synced cleanly against Reverb, so clear any prior
+      // failure alert for it. Only when writes are live, since the failure
+      // alert is only ever recorded on a real (non-dry-run) write attempt.
+      if (writesEnabled) {
+        await clearAlerts({
+          type: AlertType.SYNC_FAILURE,
+          relatedPlatform: IntegrationPlatform.REVERB,
+          relatedSku: item.canonicalSku,
+        });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       itemResult.action = "failed";

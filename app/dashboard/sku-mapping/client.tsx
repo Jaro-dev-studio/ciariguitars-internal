@@ -45,6 +45,7 @@ import { toast } from "sonner";
 import { PageIntro } from "@/components/page-intro";
 import {
   importCatalogs,
+  syncMappings,
   createMapping,
   updateMapping,
   deleteMapping,
@@ -211,6 +212,7 @@ export function SKUMappingClient({
   const router = useRouter();
   const [searchTerm, setSearchTerm] = useState("");
   const [isImporting, startImport] = useTransition();
+  const [isSyncing, startSync] = useTransition();
   const [isSuggesting, startSuggest] = useTransition();
   const [isMatching, startMatch] = useTransition();
   const [isSaving, startSave] = useTransition();
@@ -246,6 +248,20 @@ export function SKUMappingClient({
       }
       toast.success("Catalogs imported", {
         description: `${data?.katanaVariants ?? 0} Katana variants, ${data?.reverbListings ?? 0} Reverb listings`,
+      });
+      router.refresh();
+    });
+  };
+
+  const handleSync = () => {
+    startSync(async () => {
+      const { data, error } = await syncMappings();
+      if (error) {
+        toast.error("Sync mappings failed", { description: error });
+        return;
+      }
+      toast.success(`${data?.created ?? 0} new mapping(s) created`, {
+        description: `Imported ${data?.reverbListings ?? 0} Reverb listings and ${data?.katanaVariants ?? 0} Katana variants. ${data?.ambiguous ?? 0} ambiguous, ${data?.skipped ?? 0} skipped.`,
       });
       router.refresh();
     });
@@ -359,11 +375,11 @@ export function SKUMappingClient({
       .map((m) =>
         [
           m.canonicalSku,
-          `"${m.name.replace(/"/g, '""')}"`,
+          `"${m.name.replace(/"/g, "\"\"")}"`,
           m.katanaVariantId ?? "",
           m.reverbListingId ?? "",
           m.reverbSku ?? "",
-          `"${(m.reverbTitle ?? "").replace(/"/g, '""')}"`,
+          `"${(m.reverbTitle ?? "").replace(/"/g, "\"\"")}"`,
         ].join(",")
       )
       .join("\n");
@@ -389,8 +405,12 @@ export function SKUMappingClient({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={handleSync} disabled={isSyncing}>
+            <RefreshCw className={cn("mr-2 size-4", isSyncing && "animate-spin")} />
+            {isSyncing ? "Syncing..." : "Sync mappings"}
+          </Button>
           <Button variant="outline" size="sm" onClick={handleImport} disabled={isImporting}>
-            <RefreshCw className={cn("mr-2 size-4", isImporting && "animate-spin")} />
+            <Download className={cn("mr-2 size-4", isImporting && "animate-spin")} />
             {isImporting ? "Importing..." : "Import catalogs"}
           </Button>
           <Button variant="outline" size="sm" onClick={handleAutoMatch} disabled={isMatching || notImported}>
@@ -405,7 +425,7 @@ export function SKUMappingClient({
             <Download className="mr-2 size-4" />
             Export
           </Button>
-          <Button onClick={() => setAddOpen(true)} disabled={notImported}>
+          <Button variant="outline" size="sm" onClick={() => setAddOpen(true)} disabled={notImported}>
             <Plus className="mr-2 size-4" />
             Add Mapping
           </Button>
@@ -413,13 +433,14 @@ export function SKUMappingClient({
       </div>
 
       <PageIntro icon={Info}>
-        This is the foundation for every sync, linking each Katana variant to its Reverb listing.{" "}
-        <strong>Import catalogs</strong> pulls the latest variants and listings from both platforms.{" "}
-        <strong>Auto-match by SKU</strong> links items whose Katana and Reverb SKUs are now identical
-        (the reliable path now that the client maintains canonical SKUs on Reverb).{" "}
-        <strong>Auto-suggest</strong> proposes fuzzy title matches for the rest, which you can accept
-        or add manually. Mappings flagged <strong>Review</strong> point at a Reverb listing that has
-        sold, ended, or had its SKU reassigned. Only mapped items are kept in sync.
+        This is the foundation for every sync, linking each Katana variant to its Reverb listing.
+        After adding or editing SKUs on Reverb, click <strong>Sync mappings</strong> - it re-imports
+        both catalogs and auto-links every item whose Katana and Reverb SKUs now match, in one step
+        (a plain page refresh only re-reads existing mappings, so the mapped count will not move on
+        its own). The separate <strong>Import catalogs</strong>, <strong>Auto-match by SKU</strong>,
+        and <strong>Auto-suggest</strong> (fuzzy title matches) buttons run those steps individually
+        if needed. Mappings flagged <strong>Review</strong> point at a Reverb listing that has sold,
+        ended, or had its SKU reassigned. Only mapped items are kept in sync.
       </PageIntro>
 
       {error && (
@@ -429,19 +450,19 @@ export function SKUMappingClient({
       )}
 
       {notImported && (
-        <div className="rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
+        <div className="border-warning/30 bg-warning/10 rounded-lg border p-4 text-sm">
           No catalog data yet. Click <strong>Import catalogs</strong> to pull Katana
           variants and Reverb listings, then map them (or use Auto-suggest).
         </div>
       )}
 
       {reviewCount > 0 && (
-        <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-4 text-sm">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+        <div className="border-warning/30 bg-warning/10 flex items-start gap-2 rounded-lg border p-4 text-sm">
+          <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" />
           <span>
             <strong>{reviewCount} mapping(s) need review.</strong> Their Reverb listing has sold,
-            ended, or had its SKU reassigned. Re-import catalogs, then edit or remove these so syncs
-            target a live listing.
+            ended, or had its SKU reassigned. Click <strong>Sync mappings</strong>, then edit or
+            remove these so syncs target a live listing.
           </span>
         </div>
       )}
@@ -552,7 +573,7 @@ export function SKUMappingClient({
                           <div className="flex min-w-0 flex-col gap-1">
                             <div className="flex min-w-0 items-center gap-1">
                               {m.needsReview ? (
-                                <AlertTriangle className="size-3.5 shrink-0 text-warning" />
+                                <AlertTriangle className="text-warning size-3.5 shrink-0" />
                               ) : (
                                 <CheckCircle2 className="size-3.5 shrink-0 text-accent" />
                               )}
@@ -561,7 +582,7 @@ export function SKUMappingClient({
                               </TitleLink>
                             </div>
                             {m.needsReview && m.reviewReason && (
-                              <Badge variant="outline" className="w-fit border-warning/40 text-xs text-warning">
+                              <Badge variant="outline" className="border-warning/40 text-warning w-fit text-xs">
                                 Review: {m.reviewReason}
                               </Badge>
                             )}

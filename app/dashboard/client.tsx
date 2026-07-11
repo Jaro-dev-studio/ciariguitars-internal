@@ -115,8 +115,8 @@ function MetricCard({
               </div>
             )}
           </div>
-          <div className="rounded-lg bg-primary/10 p-3">
-            <Icon className="size-6 text-primary" />
+          <div className="bg-primary/10 rounded-lg p-3">
+            <Icon className="text-primary size-6" />
           </div>
         </div>
         {href && (
@@ -181,23 +181,23 @@ function IntegrationStatusCard({ integrations }: { integrations: DashboardData["
           </div>
         ) : (
           integrations.map((integration) => (
-          <motion.div
-            key={integration.platform}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex items-center justify-between rounded-lg border border-border bg-background p-3"
-          >
-            <div className="flex items-center gap-3">
-              {getStatusIcon(integration.status)}
-              <div>
-                <p className="text-sm font-medium">{integration.platform}</p>
-                <p className="text-xs text-muted-foreground">
-                  {integration.lastSync ? `Last sync: ${integration.lastSync}` : "Not connected"}
-                </p>
+            <motion.div
+              key={integration.platform}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-center justify-between rounded-lg border border-border bg-background p-3"
+            >
+              <div className="flex items-center gap-3">
+                {getStatusIcon(integration.status)}
+                <div>
+                  <p className="text-sm font-medium">{integration.platform}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {integration.lastSync ? `Last sync: ${integration.lastSync}` : "Not connected"}
+                  </p>
+                </div>
               </div>
-            </div>
-            {getStatusBadge(integration.status)}
-          </motion.div>
+              {getStatusBadge(integration.status)}
+            </motion.div>
           ))
         )}
       </CardContent>
@@ -242,26 +242,26 @@ function RecentSyncsCard({ syncs }: { syncs: DashboardData["recentSyncs"] }) {
           </div>
         ) : (
           syncs.map((sync, index) => (
-          <motion.div
-            key={sync.id}
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: index * 0.05 }}
-            className="flex items-center justify-between rounded-lg border border-border bg-background p-3"
-          >
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-primary/10 p-2">
-                <RefreshCw className="size-4 text-primary" />
+            <motion.div
+              key={sync.id}
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: index * 0.05 }}
+              className="flex items-center justify-between rounded-lg border border-border bg-background p-3"
+            >
+              <div className="flex items-center gap-3">
+                <div className="bg-primary/10 rounded-lg p-2">
+                  <RefreshCw className="text-primary size-4" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium">{sync.type}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {sync.platform} - {sync.itemCount} items - {sync.createdAt}
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-sm font-medium">{sync.type}</p>
-                <p className="text-xs text-muted-foreground">
-                  {sync.platform} - {sync.itemCount} items - {sync.createdAt}
-                </p>
-              </div>
-            </div>
-            {getStatusBadge(sync.status)}
-          </motion.div>
+              {getStatusBadge(sync.status)}
+            </motion.div>
           ))
         )}
       </CardContent>
@@ -276,9 +276,9 @@ function AlertsCard({ alerts }: { alerts: DashboardData["alerts"] }) {
       case "CRITICAL":
         return <XCircle className="size-4 text-destructive" />;
       case "WARNING":
-        return <AlertTriangle className="size-4 text-warning" />;
+        return <AlertTriangle className="text-warning size-4" />;
       default:
-        return <Activity className="size-4 text-primary" />;
+        return <Activity className="text-primary size-4" />;
     }
   };
 

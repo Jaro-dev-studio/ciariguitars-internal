@@ -158,7 +158,7 @@ export function SignupClient() {
                     type="text"
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
-                    className="border-input focus:border-primary focus:ring-primary w-full rounded-lg border bg-background py-2.5 pl-4 pr-4 text-sm transition-colors focus:outline-none focus:ring-1"
+                    className="border-input focus:border-primary focus:ring-primary w-full rounded-lg border bg-background px-4 py-2.5 text-sm transition-colors focus:outline-none focus:ring-1"
                     placeholder="Doe"
                     autoComplete="family-name"
                   />

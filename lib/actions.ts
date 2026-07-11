@@ -1152,4 +1152,3 @@ export async function toggleRecurringTaskActive(id: string): Promise<{
     return { data: null, error: "Failed to toggle recurring task" };
   }
 }
-

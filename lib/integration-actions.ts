@@ -16,6 +16,7 @@ import {
 } from "@/lib/integrations/inventory-sync";
 import { pollReverbOrders } from "@/lib/integrations/sale-handler";
 import { touchIntegrationLastSync } from "@/lib/integrations/sync-logger";
+import { cleanupAlertsCore, type AlertCleanupResult } from "@/lib/integrations/alert-maintenance";
 
 async function requireAuth(): Promise<string | null> {
   const session = await getServerSession(authOptions);
@@ -146,6 +147,29 @@ export async function dismissAlert(alertId: string): Promise<{
     return {
       data: null,
       error: error instanceof Error ? error.message : "Failed to dismiss alert",
+    };
+  }
+}
+
+export async function cleanupAlerts(): Promise<{
+  data: AlertCleanupResult | null;
+  error: string | null;
+}> {
+  try {
+    const userId = await requireAuth();
+    if (!userId) return { data: null, error: "Not authenticated" };
+
+    console.log("[IntegrationActions] Cleaning up alerts...");
+    const result = await cleanupAlertsCore();
+
+    revalidatePath("/dashboard/sync-logs");
+    revalidatePath("/dashboard");
+    return { data: result, error: null };
+  } catch (error) {
+    console.error("[IntegrationActions] cleanupAlerts failed:", error);
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "Failed to clean up alerts",
     };
   }
 }

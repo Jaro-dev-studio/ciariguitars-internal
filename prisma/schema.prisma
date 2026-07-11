@@ -411,6 +411,11 @@ model Alert {
   actionUrl   String?
   actionLabel String?
 
+  // Stable fingerprint used to collapse repeated identical alerts into a single
+  // row. Recurrences bump `count` and `updatedAt` instead of inserting new rows.
+  dedupeKey String?
+  count     Int    @default(1)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -418,6 +423,8 @@ model Alert {
   @@index([severity])
   @@index([isRead])
   @@index([createdAt])
+  @@index([dedupeKey])
+  @@index([isDismissed, createdAt])
 }
 
 enum AlertType {

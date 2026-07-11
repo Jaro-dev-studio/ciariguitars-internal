@@ -399,8 +399,8 @@ export function InventorySyncClient({
       </div>
 
       {dryRun ? (
-        <div className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
-          <FlaskConical className="mt-0.5 size-4 shrink-0 text-warning" />
+        <div className="border-warning/40 bg-warning/10 flex items-start gap-3 rounded-lg border p-3 text-sm">
+          <FlaskConical className="text-warning mt-0.5 size-4 shrink-0" />
           <div className="text-foreground">
             <p className="font-medium">Dry run is on - nothing will be written to Reverb.</p>
             <p className="text-muted-foreground">
@@ -540,7 +540,7 @@ export function InventorySyncClient({
                             {isInSync ? (
                               <CheckCircle2 className="size-4 text-accent" />
                             ) : (
-                              <AlertTriangle className="size-4 text-warning" />
+                              <AlertTriangle className="text-warning size-4" />
                             )}
                           </div>
                         </TableCell>
@@ -550,7 +550,7 @@ export function InventorySyncClient({
                           ) : isInSync ? (
                             <span className="text-xs text-accent">In sync</span>
                           ) : (
-                            <span className="text-xs text-warning">Needs update</span>
+                            <span className="text-warning text-xs">Needs update</span>
                           )}
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">

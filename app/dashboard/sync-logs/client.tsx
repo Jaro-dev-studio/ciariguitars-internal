@@ -171,9 +171,9 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
       case "CRITICAL":
         return <XCircle className="size-4 text-destructive" />;
       case "WARNING":
-        return <AlertTriangle className="size-4 text-warning" />;
+        return <AlertTriangle className="text-warning size-4" />;
       default:
-        return <Bell className="size-4 text-primary" />;
+        return <Bell className="text-primary size-4" />;
     }
   };
 
@@ -211,8 +211,8 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-primary/10 p-2.5">
-                <FileText className="size-5 text-primary" />
+              <div className="bg-primary/10 rounded-lg p-2.5">
+                <FileText className="text-primary size-5" />
               </div>
               <div>
                 <p className="text-2xl font-bold">{logs.length}</p>
@@ -250,8 +250,8 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-warning/10 p-2.5">
-                <AlertTriangle className="size-5 text-warning" />
+              <div className="bg-warning/10 rounded-lg p-2.5">
+                <AlertTriangle className="text-warning size-5" />
               </div>
               <div>
                 <p className="text-2xl font-bold">{alertData.length}</p>
@@ -399,7 +399,7 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                               {log.dryRun && (
                                 <Badge
                                   variant="outline"
-                                  className="gap-1 border-warning/40 bg-warning/10 text-warning"
+                                  className="border-warning/40 bg-warning/10 text-warning gap-1"
                                 >
                                   <FlaskConical className="size-3" />
                                   Dry run
@@ -524,7 +524,7 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                     {selectedLog.dryRun && (
                       <Badge
                         variant="outline"
-                        className="gap-1 border-warning/40 bg-warning/10 text-warning"
+                        className="border-warning/40 bg-warning/10 text-warning gap-1"
                       >
                         <FlaskConical className="size-3" />
                         Dry run
@@ -534,8 +534,8 @@ export function SyncLogsClient({ syncLogs, alerts, error }: SyncLogsClientProps)
                 </div>
               </div>
               {selectedLog.dryRun && (
-                <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 p-3 text-sm">
-                  <FlaskConical className="mt-0.5 size-4 shrink-0 text-warning" />
+                <div className="border-warning/30 bg-warning/10 flex items-start gap-2 rounded-md border p-3 text-sm">
+                  <FlaskConical className="text-warning mt-0.5 size-4 shrink-0" />
                   <span>
                     This was a <strong>dry run</strong> - it shows what would have happened, but no
                     change was written to Katana or Reverb.

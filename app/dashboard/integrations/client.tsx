@@ -79,8 +79,8 @@ export function IntegrationsClient({ integrations, syncConfigs, error }: Integra
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-primary/10 p-2.5">
-                <RefreshCw className="size-5 text-primary" />
+              <div className="bg-primary/10 rounded-lg p-2.5">
+                <RefreshCw className="text-primary size-5" />
               </div>
               <div>
                 <p className="text-2xl font-bold">

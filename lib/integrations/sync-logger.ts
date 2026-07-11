@@ -52,6 +52,27 @@ export async function recordSyncLog(input: RecordSyncLogInput) {
   }
 }
 
+/** Stable fingerprint that identifies "the same" recurring alert. */
+function alertDedupeKey(input: {
+  type: AlertType;
+  relatedPlatform?: IntegrationPlatform;
+  relatedSku?: string;
+  title: string;
+}): string {
+  return [
+    input.type,
+    input.relatedPlatform ?? "",
+    input.relatedSku ?? "",
+    input.title,
+  ].join("|");
+}
+
+/**
+ * Records an alert, collapsing repeats. When an identical, still-active
+ * (non-dismissed) alert already exists, we bump its `count` and refresh it
+ * instead of inserting a new row. This is what stops crons from generating a
+ * fresh alert on every run for the same recurring error.
+ */
 export async function recordAlert(input: {
   type: AlertType;
   severity: AlertSeverity;
@@ -63,6 +84,28 @@ export async function recordAlert(input: {
   actionLabel?: string;
 }) {
   try {
+    const dedupeKey = alertDedupeKey(input);
+
+    const existing = await prisma.alert.findFirst({
+      where: { dedupeKey, isDismissed: false },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+
+    if (existing) {
+      return await prisma.alert.update({
+        where: { id: existing.id },
+        data: {
+          count: { increment: 1 },
+          severity: input.severity,
+          message: input.message,
+          isRead: false,
+          actionUrl: input.actionUrl,
+          actionLabel: input.actionLabel,
+        },
+      });
+    }
+
     return await prisma.alert.create({
       data: {
         type: input.type,
@@ -73,11 +116,55 @@ export async function recordAlert(input: {
         relatedPlatform: input.relatedPlatform,
         actionUrl: input.actionUrl,
         actionLabel: input.actionLabel,
+        dedupeKey,
       },
     });
   } catch (err) {
     console.error("[SyncLogger] Failed to persist alert:", err);
     return null;
+  }
+}
+
+/**
+ * Auto-resolves ("recovers") active alerts once the condition that produced
+ * them clears. Matches on the same identity fields as the dedupe key (type +
+ * platform + optional SKU) and marks the survivors dismissed so they drop off
+ * the active view and get pruned by the cleanup cron. This is the counterpart
+ * to `recordAlert`: crons call it after a successful run so stale failure
+ * alerts don't linger once things are healthy again. Returns the count cleared.
+ *
+ * Omit a field to leave it unconstrained; pass `relatedSku: null` to target the
+ * batch-level alerts that were recorded without a SKU.
+ */
+export async function clearAlerts(filter: {
+  type: AlertType;
+  relatedPlatform?: IntegrationPlatform;
+  relatedSku?: string | null;
+}): Promise<number> {
+  try {
+    const { count } = await prisma.alert.updateMany({
+      where: {
+        type: filter.type,
+        isDismissed: false,
+        ...(filter.relatedPlatform !== undefined
+          ? { relatedPlatform: filter.relatedPlatform }
+          : {}),
+        ...(filter.relatedSku !== undefined
+          ? { relatedSku: filter.relatedSku }
+          : {}),
+      },
+      data: { isDismissed: true, isRead: true },
+    });
+
+    if (count > 0) {
+      console.log(
+        `[SyncLogger] Auto-cleared ${count} recovered alert(s) (type=${filter.type}, platform=${filter.relatedPlatform ?? "any"}, sku=${filter.relatedSku ?? "any"})`
+      );
+    }
+    return count;
+  } catch (err) {
+    console.error("[SyncLogger] Failed to clear recovered alerts:", err);
+    return 0;
   }
 }
 

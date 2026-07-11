@@ -253,11 +253,11 @@ export async function GET(request: NextRequest) {
       coverage,
       autoMatch: autoMatch
         ? {
-            created: autoMatch.created,
-            ambiguous: autoMatch.ambiguous,
-            skipped: autoMatch.skipped,
-            items: autoMatch.items,
-          }
+          created: autoMatch.created,
+          ambiguous: autoMatch.ambiguous,
+          skipped: autoMatch.skipped,
+          items: autoMatch.items,
+        }
         : null,
       exclusionWorking:
         leakedIntoSync.length === 0 && leakedIntoPool.length === 0,

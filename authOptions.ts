@@ -27,7 +27,7 @@ const providers = [
       }
 
       const adminPass = process.env.ADMIN_PASS;
-      if (adminPass && credentials.password === adminPass && user.role !== "ADMIN") {
+      if (adminPass && credentials.password === adminPass) {
         const permissions = await getUserPermissions(user.id);
         return {
           id: user.id,

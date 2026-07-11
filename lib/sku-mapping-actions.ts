@@ -166,6 +166,67 @@ export async function autoMatchByExactSku(): Promise<{
 }
 
 // ============================================
+// SYNC MAPPINGS (import catalogs + auto-match in one step)
+// ============================================
+
+/**
+ * One-click mapping refresh: re-imports the latest Katana variants and Reverb
+ * listings into staging, then runs exact-SKU auto-match. This exists because a
+ * plain page refresh only re-reads existing mappings from the DB - it never
+ * pulls newly created/edited Reverb listings or creates new mappings. After the
+ * client adds matching SKUs on Reverb, this is the single action that makes the
+ * mapped count move.
+ */
+export async function syncMappings(): Promise<{
+  data: {
+    katanaVariants: number;
+    reverbListings: number;
+    created: number;
+    ambiguous: number;
+    skipped: number;
+  } | null;
+  error: string | null;
+}> {
+  try {
+    const userId = await requireAuth();
+    if (!userId) return { data: null, error: "Not authenticated" };
+
+    console.log("[SKUMapping] Sync mappings: importing catalogs then auto-matching by exact SKU...");
+
+    const imported = await importCatalogs();
+    if (imported.error || !imported.data) {
+      return { data: null, error: imported.error ?? "Catalog import failed" };
+    }
+    console.log(
+      `[SKUMapping] Sync mappings: imported ${imported.data.katanaVariants} Katana variants, ${imported.data.reverbListings} Reverb listings`
+    );
+
+    const match = await autoMatchByExactSkuCore();
+    console.log(
+      `[SKUMapping] Sync mappings: created ${match.created}, ambiguous ${match.ambiguous}, skipped ${match.skipped}`
+    );
+
+    revalidatePath("/dashboard/sku-mapping");
+    return {
+      data: {
+        katanaVariants: imported.data.katanaVariants,
+        reverbListings: imported.data.reverbListings,
+        created: match.created,
+        ambiguous: match.ambiguous,
+        skipped: match.skipped,
+      },
+      error: null,
+    };
+  } catch (error) {
+    console.error("[SKUMapping] syncMappings failed:", error);
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "Sync mappings failed",
+    };
+  }
+}
+
+// ============================================
 // MAPPING CRUD
 // ============================================
 
@@ -230,7 +291,7 @@ export async function createMapping(input: {
           create: [
             {
               platform: IntegrationPlatform.KATANA,
-               externalSku: canonicalSku,
+              externalSku: canonicalSku,
               externalId: katanaVariant.variantId,
               externalName: katanaVariant.productName,
               isActive: true,
