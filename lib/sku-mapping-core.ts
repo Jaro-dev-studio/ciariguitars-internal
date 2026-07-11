@@ -20,6 +20,16 @@ export interface ExactMatchResult {
 }
 
 /**
+ * Normalize a SKU for matching by stripping stray leading/trailing dashes and
+ * surrounding whitespace, so a data-entry typo like `-CIARI-STD-OW-R` or
+ * `CIARI-DUO-OW-R-P90V-` still matches its clean Katana counterpart. Internal
+ * separators and casing are preserved. Returns "" if nothing is left.
+ */
+export function normalizeSku(sku: string): string {
+  return sku.trim().replace(/^[-\s]+|[-\s]+$/g, "");
+}
+
+/**
  * Core exact-SKU auto-match. Creates mappings where a Katana variant SKU
  * exactly equals a Reverb listing SKU. This is the auth-free implementation
  * shared by the `autoMatchByExactSku` server action and internal tooling.
@@ -52,13 +62,16 @@ export async function autoMatchByExactSkuCore(): Promise<ExactMatchResult> {
       .map((m) => m.externalId)
   );
 
-  // Group Reverb listings by SKU (skip blank SKUs).
+  // Group Reverb listings by normalized SKU (skip blank SKUs). Normalizing
+  // strips stray leading/trailing dashes so typo'd listings still match.
   const reverbBySku = new Map<string, typeof reverbCatalog>();
   for (const l of reverbCatalog) {
     if (!l.sku) continue;
-    const arr = reverbBySku.get(l.sku) ?? [];
+    const key = normalizeSku(l.sku);
+    if (!key) continue;
+    const arr = reverbBySku.get(key) ?? [];
     arr.push(l);
-    reverbBySku.set(l.sku, arr);
+    reverbBySku.set(key, arr);
   }
 
   console.log(
@@ -76,8 +89,9 @@ export async function autoMatchByExactSkuCore(): Promise<ExactMatchResult> {
     if (mappedKatanaSkus.has(sku)) continue; // already mapped on Katana side
 
     // Skip Reverb "unique" (one-of-a-kind) listings: has_inventory = false.
-    // These are excluded from the mapping pool.
-    const candidates = (reverbBySku.get(sku) ?? []).filter(
+    // These are excluded from the mapping pool. Look up by normalized SKU so
+    // listings with a stray dash still match this variant.
+    const candidates = (reverbBySku.get(normalizeSku(sku)) ?? []).filter(
       (l) => !mappedReverbListingIds.has(l.listingId) && l.hasInventory !== false
     );
     if (candidates.length === 0) continue;

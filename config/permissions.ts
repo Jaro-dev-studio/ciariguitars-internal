@@ -12,6 +12,7 @@ export const PERMISSION_PAGES = [
   { key: "costSync", label: "Cost Sync", path: "/dashboard/cost-sync" },
   { key: "integrations", label: "Integrations", path: "/dashboard/integrations" },
   { key: "syncLogs", label: "Sync Logs", path: "/dashboard/sync-logs" },
+  { key: "debugMappings", label: "Debug Mappings", path: "/dashboard/debug-mappings" },
   { key: "users", label: "Users", path: "/dashboard/users" },
   { key: "profile", label: "Profile", path: "/dashboard/profile" },
 ] as const;

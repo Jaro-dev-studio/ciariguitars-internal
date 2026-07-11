@@ -14,6 +14,7 @@ import {
   DollarSign,
   Settings,
   FileText,
+  Bug,
   Music,
 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
@@ -66,6 +67,7 @@ const allNavigationSections: NavSection[] = [
     items: [
       { href: "/dashboard/integrations", label: "Integrations", icon: Settings, pageKey: "integrations" },
       { href: "/dashboard/sync-logs", label: "Sync Logs", icon: FileText, pageKey: "syncLogs" },
+      { href: "/dashboard/debug-mappings", label: "Debug Mappings", icon: Bug, pageKey: "debugMappings" },
     ],
   },
   {

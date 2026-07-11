@@ -7,10 +7,13 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/authOptions";
 import { katana } from "@/lib/integrations/katana";
 import { reverb } from "@/lib/integrations/reverb";
-import { autoMatchByExactSkuCore } from "@/lib/sku-mapping-core";
+import { autoMatchByExactSkuCore, normalizeSku } from "@/lib/sku-mapping-core";
 import type { ExactMatchResultItem } from "@/lib/sku-mapping-core";
+import { computeMappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
+import type { MappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
 
 export type { ExactMatchResultItem } from "@/lib/sku-mapping-core";
+export type { MappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
 
 async function requireAuth(): Promise<string | null> {
   const session = await getServerSession(authOptions);
@@ -227,6 +230,30 @@ export async function syncMappings(): Promise<{
 }
 
 // ============================================
+// DIAGNOSTICS (read-only coverage analysis)
+// ============================================
+
+export async function runMappingDiagnostics(): Promise<{
+  data: MappingDiagnostics | null;
+  error: string | null;
+}> {
+  try {
+    const userId = await requireAuth();
+    if (!userId) return { data: null, error: "Not authenticated" };
+
+    console.log("[SKUMapping] Running mapping diagnostics...");
+    const data = await computeMappingDiagnostics();
+    return { data, error: null };
+  } catch (error) {
+    console.error("[SKUMapping] runMappingDiagnostics failed:", error);
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "Diagnostics failed",
+    };
+  }
+}
+
+// ============================================
 // MAPPING CRUD
 // ============================================
 
@@ -428,6 +455,15 @@ export interface UnmappedKatana {
   sku: string | null;
 }
 
+export interface KatanaVariantRow {
+  variantId: string;
+  productId: string | null;
+  productName: string;
+  variantName: string | null;
+  sku: string | null;
+  isMapped: boolean;
+}
+
 export interface UnmappedReverb {
   listingId: string;
   title: string;
@@ -449,6 +485,7 @@ export async function fetchMappingData(): Promise<{
     mappings: MappingRow[];
     unmappedKatana: UnmappedKatana[];
     unmappedReverb: UnmappedReverb[];
+    katanaVariants: KatanaVariantRow[];
     katanaImported: number;
     reverbImported: number;
   } | null;
@@ -490,7 +527,7 @@ export async function fetchMappingData(): Promise<{
         } else if (staged.state === "sold" || staged.state === "ended") {
           needsReview = true;
           reviewReason = `Reverb listing is ${staged.state}`;
-        } else if (staged.sku && staged.sku !== item.sku) {
+        } else if (staged.sku && normalizeSku(staged.sku) !== normalizeSku(item.sku)) {
           needsReview = true;
           reviewReason = `Reverb SKU is now ${staged.sku} (reassigned)`;
         }
@@ -529,6 +566,15 @@ export async function fetchMappingData(): Promise<{
         sku: v.sku,
       }));
 
+    const katanaVariants: KatanaVariantRow[] = katanaCatalog.map((v) => ({
+      variantId: v.variantId,
+      productId: v.productId,
+      productName: v.productName,
+      variantName: v.variantName,
+      sku: v.sku,
+      isMapped: mappedKatanaIds.has(v.variantId),
+    }));
+
     // Exclude Reverb "unique" (one-of-a-kind) listings (has_inventory = false)
     // from the mapping pool. Null = unknown, so it stays available.
     const unmappedReverb: UnmappedReverb[] = reverbCatalog
@@ -545,6 +591,7 @@ export async function fetchMappingData(): Promise<{
         mappings,
         unmappedKatana,
         unmappedReverb,
+        katanaVariants,
         katanaImported: katanaCatalog.length,
         reverbImported: reverbCatalog.length,
       },

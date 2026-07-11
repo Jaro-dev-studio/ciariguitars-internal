@@ -54,6 +54,7 @@ import {
   type MappingRow,
   type UnmappedKatana,
   type UnmappedReverb,
+  type KatanaVariantRow,
   type SuggestedMatch,
 } from "@/lib/sku-mapping-actions";
 
@@ -61,9 +62,21 @@ interface SKUMappingClientProps {
   mappings: MappingRow[];
   unmappedKatana: UnmappedKatana[];
   unmappedReverb: UnmappedReverb[];
+  katanaVariants: KatanaVariantRow[];
   katanaImported: number;
   reverbImported: number;
   error: string | null;
+}
+
+type DetailView = "mapped" | "katanaVariants" | "unmappedKatana" | "unmappedReverb";
+
+interface DetailItem {
+  key: string;
+  primary: string;
+  primaryHref: string | null;
+  secondary: string;
+  secondaryHref: string | null;
+  badge: { label: string; warning: boolean } | null;
 }
 
 const KATANA_APP_BASE =
@@ -107,14 +120,32 @@ function StatCard({
   value,
   label,
   tone,
+  onClick,
 }: {
   icon: typeof Link2;
   value: number;
   label: string;
   tone: string;
+  onClick?: () => void;
 }) {
+  const clickable = !!onClick && value > 0;
   return (
-    <Card>
+    <Card
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={clickable ? onClick : undefined}
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick?.();
+              }
+            }
+          : undefined
+      }
+      className={cn(clickable && "cursor-pointer transition-colors hover:bg-muted/50")}
+    >
       <CardContent className="p-4">
         <div className="flex items-center gap-3">
           <div className={cn("rounded-lg p-2.5", tone)}>
@@ -205,12 +236,15 @@ export function SKUMappingClient({
   mappings,
   unmappedKatana,
   unmappedReverb,
+  katanaVariants,
   katanaImported,
   reverbImported,
   error,
 }: SKUMappingClientProps) {
   const router = useRouter();
   const [searchTerm, setSearchTerm] = useState("");
+  const [detailView, setDetailView] = useState<DetailView | null>(null);
+  const [detailSearch, setDetailSearch] = useState("");
   const [isImporting, startImport] = useTransition();
   const [isSyncing, startSync] = useTransition();
   const [isSuggesting, startSuggest] = useTransition();
@@ -238,6 +272,78 @@ export function SKUMappingClient({
   }, [mappings, searchTerm]);
 
   const reviewCount = useMemo(() => mappings.filter((m) => m.needsReview).length, [mappings]);
+
+  const detailConfig = useMemo((): {
+    title: string;
+    description: string;
+    items: DetailItem[];
+  } | null => {
+    switch (detailView) {
+      case "mapped":
+        return {
+          title: "Mapped Items",
+          description: "Katana variants currently linked to a Reverb listing",
+          items: mappings.map((m) => ({
+            key: m.inventoryItemId,
+            primary: m.canonicalSku,
+            primaryHref: katanaProductUrl(m.katanaProductId),
+            secondary: m.reverbTitle ?? m.reverbListingId ?? "Not mapped",
+            secondaryHref: m.reverbListingId ? reverbItemUrl(m.reverbListingId) : null,
+            badge: m.needsReview ? { label: "Review", warning: true } : null,
+          })),
+        };
+      case "katanaVariants":
+        return {
+          title: "Katana Variants",
+          description: "All Katana variants imported into staging",
+          items: katanaVariants.map((v) => ({
+            key: v.variantId,
+            primary: [v.productName, v.variantName].filter(Boolean).join(" - ") || v.variantId,
+            primaryHref: katanaProductUrl(v.productId),
+            secondary: v.sku ?? v.variantId,
+            secondaryHref: null,
+            badge: v.isMapped ? { label: "Mapped", warning: false } : { label: "Unmapped", warning: true },
+          })),
+        };
+      case "unmappedKatana":
+        return {
+          title: "Unmapped Katana",
+          description: "Katana variants not yet linked to a Reverb listing",
+          items: unmappedKatana.map((v) => ({
+            key: v.variantId,
+            primary: [v.productName, v.variantName].filter(Boolean).join(" - ") || v.variantId,
+            primaryHref: katanaProductUrl(v.productId),
+            secondary: v.sku ?? v.variantId,
+            secondaryHref: null,
+            badge: null,
+          })),
+        };
+      case "unmappedReverb":
+        return {
+          title: "Unmapped Reverb",
+          description: "Reverb listings not yet linked to a Katana variant",
+          items: unmappedReverb.map((l) => ({
+            key: l.listingId,
+            primary: l.title,
+            primaryHref: reverbItemUrl(l.listingId),
+            secondary: `${l.listingId}${l.state ? ` - ${l.state}` : ""}`,
+            secondaryHref: null,
+            badge: null,
+          })),
+        };
+      default:
+        return null;
+    }
+  }, [detailView, mappings, katanaVariants, unmappedKatana, unmappedReverb]);
+
+  const filteredDetailItems = useMemo(() => {
+    if (!detailConfig) return [];
+    const q = detailSearch.toLowerCase();
+    if (!q) return detailConfig.items;
+    return detailConfig.items.filter(
+      (i) => i.primary.toLowerCase().includes(q) || i.secondary.toLowerCase().includes(q)
+    );
+  }, [detailConfig, detailSearch]);
 
   const handleImport = () => {
     startImport(async () => {
@@ -468,10 +574,34 @@ export function SKUMappingClient({
       )}
 
       <div className="grid gap-4 md:grid-cols-4">
-        <StatCard icon={Link2} value={mappings.length} label="Mapped Items" tone="bg-primary/10 text-primary" />
-        <StatCard icon={CheckCircle2} value={katanaImported} label="Katana Variants" tone="bg-secondary/10 text-secondary" />
-        <StatCard icon={AlertTriangle} value={unmappedKatana.length} label="Unmapped Katana" tone="bg-warning/10 text-warning" />
-        <StatCard icon={XCircle} value={unmappedReverb.length} label="Unmapped Reverb" tone="bg-accent/10 text-accent" />
+        <StatCard
+          icon={Link2}
+          value={mappings.length}
+          label="Mapped Items"
+          tone="bg-primary/10 text-primary"
+          onClick={() => setDetailView("mapped")}
+        />
+        <StatCard
+          icon={CheckCircle2}
+          value={katanaImported}
+          label="Katana Variants"
+          tone="bg-secondary/10 text-secondary"
+          onClick={() => setDetailView("katanaVariants")}
+        />
+        <StatCard
+          icon={AlertTriangle}
+          value={unmappedKatana.length}
+          label="Unmapped Katana"
+          tone="bg-warning/10 text-warning"
+          onClick={() => setDetailView("unmappedKatana")}
+        />
+        <StatCard
+          icon={XCircle}
+          value={unmappedReverb.length}
+          label="Unmapped Reverb"
+          tone="bg-accent/10 text-accent"
+          onClick={() => setDetailView("unmappedReverb")}
+        />
       </div>
 
       {suggestions && suggestions.length > 0 && (
@@ -702,6 +832,73 @@ export function SKUMappingClient({
               Save
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Stat detail dialog */}
+      <Dialog
+        open={!!detailView}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetailView(null);
+            setDetailSearch("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{detailConfig?.title ?? ""}</DialogTitle>
+            <DialogDescription>{detailConfig?.description ?? ""}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+              <Input
+                placeholder="Search..."
+                value={detailSearch}
+                onChange={(e) => setDetailSearch(e.target.value)}
+                className="pl-8"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {filteredDetailItems.length} of {detailConfig?.items.length ?? 0}
+            </p>
+            <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden rounded-md border">
+              {filteredDetailItems.length === 0 ? (
+                <p className="p-3 text-sm text-muted-foreground">No items</p>
+              ) : (
+                filteredDetailItems.map((item) => (
+                  <div
+                    key={item.key}
+                    className="flex min-w-0 flex-col gap-0.5 border-b px-3 py-2 last:border-b-0"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <TitleLink href={item.primaryHref} className="min-w-0 flex-1 text-sm font-medium">
+                        {item.primary}
+                      </TitleLink>
+                      {item.badge && (
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "shrink-0 text-xs",
+                            item.badge.warning ? "border-warning/40 text-warning" : "text-accent"
+                          )}
+                        >
+                          {item.badge.label}
+                        </Badge>
+                      )}
+                    </div>
+                    <TitleLink
+                      href={item.secondaryHref}
+                      className="min-w-0 font-mono text-xs text-muted-foreground"
+                    >
+                      {item.secondary}
+                    </TitleLink>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

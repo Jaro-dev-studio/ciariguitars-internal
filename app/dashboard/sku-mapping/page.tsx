@@ -9,6 +9,7 @@ export default async function SKUMappingPage() {
       mappings={data?.mappings ?? []}
       unmappedKatana={data?.unmappedKatana ?? []}
       unmappedReverb={data?.unmappedReverb ?? []}
+      katanaVariants={data?.katanaVariants ?? []}
       katanaImported={data?.katanaImported ?? 0}
       reverbImported={data?.reverbImported ?? 0}
       error={error}
