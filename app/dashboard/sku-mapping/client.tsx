@@ -137,11 +137,11 @@ function StatCard({
       onKeyDown={
         clickable
           ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onClick?.();
-              }
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onClick?.();
             }
+          }
           : undefined
       }
       className={cn(clickable && "cursor-pointer transition-colors hover:bg-muted/50")}
@@ -863,7 +863,7 @@ export function SKUMappingClient({
             <p className="text-xs text-muted-foreground">
               {filteredDetailItems.length} of {detailConfig?.items.length ?? 0}
             </p>
-            <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden rounded-md border">
+            <div className="max-h-96 overflow-y-auto overflow-x-hidden rounded-md border">
               {filteredDetailItems.length === 0 ? (
                 <p className="p-3 text-sm text-muted-foreground">No items</p>
               ) : (

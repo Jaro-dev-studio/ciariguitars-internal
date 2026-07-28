@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { IntegrationPlatform } from "@prisma/client";
+import { IntegrationPlatform, SyncSource } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/authOptions";
@@ -16,6 +16,7 @@ import {
 } from "@/lib/integrations/inventory-sync";
 import { pollReverbOrders } from "@/lib/integrations/sale-handler";
 import { touchIntegrationLastSync } from "@/lib/integrations/sync-logger";
+import { setSyncRunSummary, withSyncRun } from "@/lib/integrations/sync-run";
 import { cleanupAlertsCore, type AlertCleanupResult } from "@/lib/integrations/alert-maintenance";
 
 async function requireAuth(): Promise<string | null> {
@@ -241,10 +242,31 @@ export async function runReverbSyncNow(): Promise<{
     }
 
     console.log("[IntegrationActions] Manual Katana -> Reverb sync triggered");
-    const locationId = process.env.KATANA_DEFAULT_LOCATION_ID;
-    const result = await runKatanaToReverbSync({
-      locationIds: locationId ? [Number(locationId)] : undefined,
-    });
+    const result = await withSyncRun(
+      {
+        source: SyncSource.MANUAL,
+        trigger: "apply-inventory-sync",
+        triggeredBy: userId,
+      },
+      async () => {
+        const locationId = process.env.KATANA_DEFAULT_LOCATION_ID;
+        const syncResult = await runKatanaToReverbSync({
+          locationIds: locationId ? [Number(locationId)] : undefined,
+        });
+
+        setSyncRunSummary({
+          totalConsidered: syncResult.totalConsidered,
+          updated: syncResult.updated,
+          unpublished: syncResult.unpublished,
+          noop: syncResult.noop,
+          skipped: syncResult.skipped,
+          failed: syncResult.failed,
+          writesEnabled: syncResult.writesEnabled,
+        });
+
+        return syncResult;
+      }
+    );
 
     revalidatePath("/dashboard/inventory-sync");
     revalidatePath("/dashboard/sync-logs");
@@ -267,7 +289,23 @@ export async function pollReverbSalesNow(): Promise<{
     if (!userId) return { data: null, error: "Not authenticated" };
 
     console.log("[IntegrationActions] Manual Reverb order poll triggered");
-    const results = await pollReverbOrders({ sinceHours: 72 });
+    const results = await withSyncRun(
+      {
+        source: SyncSource.MANUAL,
+        trigger: "poll-reverb-orders",
+        triggeredBy: userId,
+      },
+      async () => {
+        const polled = await pollReverbOrders({ sinceHours: 72 });
+        setSyncRunSummary({
+          ordersProcessed: polled.length,
+          unmatched: polled.filter((r) =>
+            r.lines.some((l) => l.action === "unmatched")
+          ).length,
+        });
+        return polled;
+      }
+    );
 
     revalidatePath("/dashboard/sync-logs");
     return { data: { processed: results.length }, error: null };

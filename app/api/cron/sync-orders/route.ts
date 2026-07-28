@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { SyncSource } from "@prisma/client";
 import { pollReverbOrders } from "@/lib/integrations/sale-handler";
 import { getIntegrationConfig } from "@/lib/integrations/config";
+import { setSyncRunSummary, withSyncRun } from "@/lib/integrations/sync-run";
 
 export const maxDuration = 300;
 
@@ -32,7 +34,23 @@ export async function GET(request: NextRequest) {
 
     // Look back a couple hours so a missed run is still picked up; processing is
     // idempotent on order number so overlap is safe.
-    const processed = await pollReverbOrders({ sinceHours: 2 });
+    const processed = await withSyncRun(
+      { source: SyncSource.CRON, trigger: "sync-orders" },
+      async () => {
+        const result = await pollReverbOrders({ sinceHours: 2 });
+        setSyncRunSummary({
+          ordersProcessed: result.length,
+          unmatched: result.filter((r) =>
+            r.lines.some((l) => l.action === "unmatched")
+          ).length,
+          decremented: result.filter((r) =>
+            r.lines.some((l) => l.action === "decremented")
+          ).length,
+          dryRun,
+        });
+        return result;
+      }
+    );
 
     console.log(`[CronOrderSync] ========== Done. ${processed.length} order(s) processed ==========`);
     return NextResponse.json({

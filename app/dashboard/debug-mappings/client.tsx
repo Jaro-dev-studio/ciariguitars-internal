@@ -151,8 +151,8 @@ function ConflictItem({
         <p className="truncate text-sm font-medium">{conflict.reverbTitle}</p>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <div className="border-accent/30 bg-accent/5 min-w-0 rounded-md border p-3">
-            <p className="text-accent mb-1.5 text-xs font-medium">Should map to (unmapped)</p>
+          <div className="min-w-0 rounded-md border border-accent/30 bg-accent/5 p-3">
+            <p className="mb-1.5 text-xs font-medium text-accent">Should map to (unmapped)</p>
             <SkuLink
               sku={conflict.katanaSku}
               href={katanaProductUrl(conflict.katanaProductId)}
@@ -162,7 +162,7 @@ function ConflictItem({
               {conflict.katanaProductName}
             </p>
           </div>
-          <div className="border-destructive/30 bg-destructive/5 min-w-0 rounded-md border p-3">
+          <div className="min-w-0 rounded-md border border-destructive/30 bg-destructive/5 p-3">
             <p className="mb-1.5 text-xs font-medium text-destructive">Currently mapped to</p>
             <SkuLink
               sku={conflict.ownerKatanaSku}
@@ -300,7 +300,7 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
       {data && (
         <>
           {cleanData ? (
-            <div className="border-accent/30 bg-accent/10 flex items-start gap-2 rounded-lg border p-4 text-sm">
+            <div className="flex items-start gap-2 rounded-lg border border-accent/30 bg-accent/10 p-4 text-sm">
               <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-accent" />
               <span>
                 <strong>Not a mis-mapping - the matcher is behaving correctly.</strong> All{" "}
@@ -331,7 +331,7 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
 
           {recoverable > 0 && (
             <div className="border-primary/30 bg-primary/10 flex items-start gap-2 rounded-lg border p-4 text-sm">
-              <Info className="mt-0.5 size-4 shrink-0 text-primary" />
+              <Info className="text-primary mt-0.5 size-4 shrink-0" />
               <span>
                 <strong>Quick win: {recoverable} more will map on the next Sync.</strong> Run{" "}
                 <strong>Sync mappings</strong> on the SKU Mapping page to create them.
@@ -385,7 +385,7 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
             <CardContent>
               <div className="flex h-7 overflow-hidden rounded-md">
                 <div
-                  className="flex items-center bg-primary pl-2.5 text-primary-foreground"
+                  className="bg-primary text-primary-foreground flex items-center pl-2.5"
                   style={{ flex: Math.max(data.reverb.syncable, 1) }}
                 >
                   <span className="truncate text-xs">{data.reverb.syncable} syncable</span>

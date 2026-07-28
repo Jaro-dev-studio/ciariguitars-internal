@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getIntegrationConfig } from "@/lib/integrations/config";
 import { runKatanaToReverbSync } from "@/lib/integrations/inventory-sync";
-import { IntegrationPlatform } from "@prisma/client";
+import { setSyncRunSummary, withSyncRun } from "@/lib/integrations/sync-run";
+import { IntegrationPlatform, SyncSource } from "@prisma/client";
 import prisma from "@/lib/prisma";
 
 export const maxDuration = 60;
@@ -36,32 +37,64 @@ export async function POST(request: NextRequest) {
       `[KatanaWebhook] Received ${payload.action ?? "unknown"} for ${payload.resource_type ?? "?"} ${payload.object?.id ?? ""}`
     );
 
-    const variantId = payload.object?.id ? Number(payload.object.id) : null;
-    if (!variantId) {
-      return NextResponse.json({ data: { handled: false }, error: null });
-    }
+    // The run covers ignored deliveries too, so the dashboard shows every
+    // webhook Katana sent us - not just the ones that led to a sync.
+    const outcome = await withSyncRun(
+      {
+        source: SyncSource.WEBHOOK,
+        trigger: "webhook:katana",
+        triggeredBy: `${payload.resource_type ?? "unknown"}.${payload.action ?? "unknown"}`,
+      },
+      async () => {
+        const variantId = payload.object?.id ? Number(payload.object.id) : null;
+        if (!variantId) {
+          setSyncRunSummary({ handled: false, reason: "Payload had no object id" });
+          return { handled: false };
+        }
 
-    // The inventory webhook object id refers to the variant; map it to a canonical SKU.
-    const mapping = await prisma.sKUMapping.findFirst({
-      where: { platform: IntegrationPlatform.KATANA, externalId: String(variantId) },
-      include: { inventoryItem: { select: { sku: true } } },
-    });
-    const canonicalSku = mapping?.inventoryItem.sku ?? null;
+        // The inventory webhook object id refers to the variant; map it to a canonical SKU.
+        const mapping = await prisma.sKUMapping.findFirst({
+          where: { platform: IntegrationPlatform.KATANA, externalId: String(variantId) },
+          include: { inventoryItem: { select: { sku: true } } },
+        });
+        const canonicalSku = mapping?.inventoryItem.sku ?? null;
 
-    if (!canonicalSku) {
-      console.log(
-        `[KatanaWebhook] No mapping for Katana variant ${variantId}; ignoring`
-      );
-      return NextResponse.json({ data: { handled: false }, error: null });
-    }
+        if (!canonicalSku) {
+          console.log(
+            `[KatanaWebhook] No mapping for Katana variant ${variantId}; ignoring`
+          );
+          setSyncRunSummary({
+            handled: false,
+            variantId,
+            reason: "No canonical SKU mapped to this Katana variant",
+          });
+          return { handled: false };
+        }
 
-    console.log(`[KatanaWebhook] Re-syncing canonical SKU ${canonicalSku} to Reverb...`);
-    const result = await runKatanaToReverbSync({ onlyCanonicalSkus: [canonicalSku] });
+        console.log(`[KatanaWebhook] Re-syncing canonical SKU ${canonicalSku} to Reverb...`);
+        const result = await runKatanaToReverbSync({ onlyCanonicalSkus: [canonicalSku] });
 
-    return NextResponse.json({
-      data: { handled: true, sku: canonicalSku, updated: result.updated, unpublished: result.unpublished },
-      error: null,
-    });
+        setSyncRunSummary({
+          handled: true,
+          variantId,
+          sku: canonicalSku,
+          updated: result.updated,
+          unpublished: result.unpublished,
+          noop: result.noop,
+          skipped: result.skipped,
+          failed: result.failed,
+        });
+
+        return {
+          handled: true,
+          sku: canonicalSku,
+          updated: result.updated,
+          unpublished: result.unpublished,
+        };
+      }
+    );
+
+    return NextResponse.json({ data: outcome, error: null });
   } catch (error) {
     console.error("[KatanaWebhook] Error handling webhook:", error);
     // Return 200 so Katana does not endlessly retry on our parse errors; details are logged.

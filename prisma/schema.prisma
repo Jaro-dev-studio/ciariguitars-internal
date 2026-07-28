@@ -350,7 +350,15 @@ model SyncLog {
   
   inventoryItemId String?
   inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id], onDelete: SetNull)
-  
+
+  // What triggered the work this entry belongs to. Denormalised from the parent
+  // run so the log table can be filtered by trigger without a join.
+  source SyncSource @default(SYSTEM)
+
+  // Parent execution. Null for entries written outside a tracked run.
+  runId String?
+  run   SyncRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
   previousValue Json?
   newValue      Json?
   errorMessage  String?
@@ -369,6 +377,52 @@ model SyncLog {
   @@index([status])
   @@index([createdAt])
   @@index([inventoryItemId])
+  @@index([runId])
+  @@index([source])
+  @@index([status, createdAt])
+}
+
+// A single execution of a cron job, webhook delivery or manual dashboard
+// action. Every SyncLog written during the execution points back here, so the
+// dashboard can replay exactly what one trigger did.
+model SyncRun {
+  id String @id @default(cuid())
+
+  source  SyncSource
+  // Stable identifier of what ran, e.g. "sync-inventory" or "webhook:katana".
+  trigger String
+  status  SyncRunStatus @default(RUNNING)
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  durationMs Int?
+
+  // Per-run counters and result payload; shape depends on the trigger.
+  summary      Json?
+  errorMessage String?
+
+  // Request context for webhooks (topic/event) and manual runs (user id).
+  triggeredBy String?
+
+  logs SyncLog[]
+
+  @@index([source])
+  @@index([trigger])
+  @@index([status])
+  @@index([startedAt])
+}
+
+enum SyncSource {
+  CRON
+  WEBHOOK
+  MANUAL
+  SYSTEM
+}
+
+enum SyncRunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
 }
 
 enum SyncType {
@@ -378,6 +432,9 @@ enum SyncType {
   ORDER_SYNC
   SKU_MAPPING
   LISTING_UPDATE
+  // Inbound notification that Shop Flow finished building an instrument.
+  // Informational only - it does not drive any sync.
+  INSTRUMENT_COMPLETED
 }
 
 enum SyncStatus {

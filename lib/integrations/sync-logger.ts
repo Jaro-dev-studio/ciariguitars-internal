@@ -5,10 +5,12 @@ import {
   SyncDirection,
   SyncStatus,
   SyncType,
+  SyncSource,
   AlertSeverity,
   AlertType,
 } from "@prisma/client";
 import prisma from "@/lib/prisma";
+import { getCurrentSyncRun } from "./sync-run";
 
 export interface RecordSyncLogInput {
   syncType: SyncType;
@@ -26,6 +28,9 @@ export interface RecordSyncLogInput {
 
 export async function recordSyncLog(input: RecordSyncLogInput) {
   try {
+    // Attributes the entry to the cron/webhook/manual run it was written from.
+    const run = getCurrentSyncRun();
+
     return await prisma.syncLog.create({
       data: {
         syncType: input.syncType,
@@ -33,6 +38,8 @@ export async function recordSyncLog(input: RecordSyncLogInput) {
         status: input.status,
         direction: input.direction,
         inventoryItemId: input.inventoryItemId ?? null,
+        source: run?.source ?? SyncSource.SYSTEM,
+        runId: run?.runId ?? null,
         previousValue:
           input.previousValue === undefined
             ? undefined

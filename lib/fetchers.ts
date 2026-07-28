@@ -3,6 +3,19 @@
 import prisma from "@/lib/prisma";
 import { getUserPermissions } from "@/lib/permissions";
 import type { Permissions } from "@/config/permissions";
+import {
+  normalisePageSize,
+  type SyncLogFilters,
+  type SyncRunFilters,
+} from "@/config/sync-logs";
+import type {
+  IntegrationPlatform,
+  Prisma,
+  SyncRunStatus,
+  SyncSource,
+  SyncStatus,
+  SyncType,
+} from "@prisma/client";
 
 // ============================================
 // PROJECTS
@@ -576,36 +589,189 @@ export async function fetchSKUMappings() {
 // SYNC LOGS
 // ============================================
 
-export async function fetchSyncLogs(filters?: {
-  syncType?: string;
-  platform?: string;
-  status?: string;
-  limit?: number;
-}) {
-  try {
-    console.log("[Sync Logs] Fetching sync logs with filters:", filters);
-    
-    const where: any = {};
-    if (filters?.syncType) where.syncType = filters.syncType;
-    if (filters?.platform) where.platform = filters.platform;
-    if (filters?.status) where.status = filters.status;
+function rangeToDate(range?: string): Date | null {
+  const hours: Record<string, number> = { "1h": 1, "24h": 24, "7d": 24 * 7, "30d": 24 * 30 };
+  const window = hours[range ?? ""];
+  if (!window) return null;
+  return new Date(Date.now() - window * 60 * 60 * 1000);
+}
 
+/**
+ * Builds the Prisma filter shared by the log list, its total count and its
+ * status breakdown, so all three always describe the same set of rows.
+ *
+ * The table holds over a million rows, so every query is expected to lean on
+ * the `createdAt` index: callers pass a bounded range unless the user has
+ * explicitly asked for "all time".
+ */
+function buildSyncLogWhere(filters: SyncLogFilters) {
+  const where: Prisma.SyncLogWhereInput = {};
+
+  if (filters.syncType && filters.syncType !== "all") {
+    where.syncType = filters.syncType as SyncType;
+  }
+  if (filters.platform && filters.platform !== "all") {
+    where.platform = filters.platform as IntegrationPlatform;
+  }
+  if (filters.status && filters.status !== "all") {
+    where.status = filters.status as SyncStatus;
+  }
+  if (filters.source && filters.source !== "all") {
+    where.source = filters.source as SyncSource;
+  }
+  if (filters.runId) {
+    where.runId = filters.runId;
+  }
+  if (filters.dryRun === "true" || filters.dryRun === "false") {
+    where.dryRun = filters.dryRun === "true";
+  }
+
+  const since = rangeToDate(filters.range);
+  if (since) {
+    where.createdAt = { gte: since };
+  }
+
+  const search = filters.search?.trim();
+  if (search) {
+    where.OR = [
+      { details: { contains: search, mode: "insensitive" } },
+      { errorMessage: { contains: search, mode: "insensitive" } },
+      { inventoryItem: { sku: { contains: search, mode: "insensitive" } } },
+      { inventoryItem: { name: { contains: search, mode: "insensitive" } } },
+    ];
+  }
+
+  return where;
+}
+
+export async function fetchSyncLogs(filters: SyncLogFilters = {}) {
+  try {
+    console.log("[Sync Logs] Building query from filters:", filters);
+
+    const pageSize = normalisePageSize(filters.pageSize);
+    const requestedPage = Math.max(1, Math.floor(filters.page || 1));
+
+    const where = buildSyncLogWhere(filters);
+
+    // The status breakdown already visits every matching row, so its totals
+    // double as the row count - a separate count() would scan the table twice.
+    console.log("[Sync Logs] Counting matching rows by status...");
+    const grouped = await prisma.syncLog.groupBy({
+      by: ["status"],
+      where,
+      _count: { _all: true },
+    });
+
+    const statusCounts = grouped.reduce<Record<string, number>>((acc, row) => {
+      acc[row.status] = row._count._all;
+      return acc;
+    }, {});
+    const total = grouped.reduce((sum, row) => sum + row._count._all, 0);
+
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    // Clamp so a stale page number from the URL still returns rows.
+    const page = Math.min(requestedPage, totalPages);
+
+    console.log(`[Sync Logs] Fetching page ${page}/${totalPages} (${pageSize} per page)...`);
     const logs = await prisma.syncLog.findMany({
       where,
-      take: filters?.limit || 100,
+      skip: (page - 1) * pageSize,
+      take: pageSize,
       include: {
-        inventoryItem: {
-          select: { sku: true, name: true },
-        },
+        inventoryItem: { select: { sku: true, name: true } },
+        run: { select: { id: true, trigger: true, source: true } },
       },
       orderBy: { createdAt: "desc" },
     });
 
-    console.log("[Sync Logs] Fetched", logs.length, "logs");
-    return { data: logs, error: null };
+    console.log(`[Sync Logs] Fetched ${logs.length} of ${total} matching logs`);
+    return {
+      data: { logs, total, page, pageSize, totalPages, statusCounts },
+      error: null,
+    };
   } catch (error) {
     console.error("[Sync Logs] Error fetching sync logs:", error);
     return { data: null, error: "Failed to fetch sync logs" };
+  }
+}
+
+// ============================================
+// SYNC RUNS
+// ============================================
+
+/**
+ * Lists executions of crons, webhooks and manual actions. Each row is one
+ * trigger firing, with the number of sync log entries it produced so a run can
+ * be drilled into from the logs tab.
+ */
+export async function fetchSyncRuns(filters: SyncRunFilters = {}) {
+  try {
+    console.log("[Sync Runs] Fetching runs with filters:", filters);
+
+    const pageSize = normalisePageSize(filters.pageSize);
+    const requestedPage = Math.max(1, Math.floor(filters.page || 1));
+
+    const where: Prisma.SyncRunWhereInput = {};
+    if (filters.source && filters.source !== "all") {
+      where.source = filters.source as SyncSource;
+    }
+    if (filters.trigger && filters.trigger !== "all") {
+      where.trigger = filters.trigger;
+    }
+    if (filters.status && filters.status !== "all") {
+      where.status = filters.status as SyncRunStatus;
+    }
+    const since = rangeToDate(filters.range);
+    if (since) {
+      where.startedAt = { gte: since };
+    }
+
+    const total = await prisma.syncRun.count({ where });
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+
+    const [runs, triggers] = await Promise.all([
+      prisma.syncRun.findMany({
+        where,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { _count: { select: { logs: true } } },
+        orderBy: { startedAt: "desc" },
+      }),
+      // Powers the trigger dropdown without hardcoding the list in the UI.
+      prisma.syncRun.groupBy({ by: ["trigger"], _count: { _all: true } }),
+    ]);
+
+    console.log(`[Sync Runs] Fetched ${runs.length} of ${total} runs`);
+    return {
+      data: {
+        runs,
+        total,
+        page,
+        pageSize,
+        totalPages,
+        triggers: triggers.map((t) => t.trigger).sort(),
+      },
+      error: null,
+    };
+  } catch (error) {
+    console.error("[Sync Runs] Error fetching sync runs:", error);
+    return { data: null, error: "Failed to fetch sync runs" };
+  }
+}
+
+/** Loads a single run so the logs tab can show what it was scoped to. */
+export async function fetchSyncRunById(runId: string) {
+  try {
+    console.log("[Sync Runs] Fetching run", runId);
+    const run = await prisma.syncRun.findUnique({
+      where: { id: runId },
+      include: { _count: { select: { logs: true } } },
+    });
+    return { data: run, error: null };
+  } catch (error) {
+    console.error("[Sync Runs] Error fetching run:", error);
+    return { data: null, error: "Failed to fetch run" };
   }
 }
 

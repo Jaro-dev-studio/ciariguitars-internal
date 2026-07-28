@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { SyncSource } from "@prisma/client";
 import { cleanupAlertsCore } from "@/lib/integrations/alert-maintenance";
+import {
+  failStaleSyncRuns,
+  setSyncRunSummary,
+  withSyncRun,
+} from "@/lib/integrations/sync-run";
 
 export const maxDuration = 300;
 
@@ -23,7 +29,20 @@ export async function GET(request: NextRequest) {
 
   try {
     console.log("[CronAlertCleanup] ========== Cleaning up alerts ==========");
-    const result = await cleanupAlertsCore();
+
+    const result = await withSyncRun(
+      { source: SyncSource.CRON, trigger: "cleanup-alerts" },
+      async () => {
+        const cleanup = await cleanupAlertsCore();
+
+        console.log("[CronAlertCleanup] Sweeping runs that never reported completion...");
+        const staleRunsFailed = await failStaleSyncRuns();
+
+        setSyncRunSummary({ ...cleanup, staleRunsFailed });
+        return { ...cleanup, staleRunsFailed };
+      }
+    );
+
     console.log("[CronAlertCleanup] ========== Done ==========");
     return NextResponse.json({ data: result, error: null });
   } catch (error) {

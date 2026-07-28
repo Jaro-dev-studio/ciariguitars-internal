@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { SyncSource } from "@prisma/client";
 import { runKatanaToReverbSync } from "@/lib/integrations/inventory-sync";
+import { setSyncRunSummary, withSyncRun } from "@/lib/integrations/sync-run";
 
 export const maxDuration = 300;
 
@@ -23,11 +25,28 @@ export async function GET(request: NextRequest) {
   try {
     console.log("[CronInventorySync] ========== Starting Katana -> Reverb inventory push ==========");
 
-    const locationId = process.env.KATANA_DEFAULT_LOCATION_ID;
-    console.log("[CronInventorySync] Pushing Katana availability to Reverb...");
-    const syncResult = await runKatanaToReverbSync({
-      locationIds: locationId ? [Number(locationId)] : undefined,
-    });
+    const syncResult = await withSyncRun(
+      { source: SyncSource.CRON, trigger: "sync-inventory" },
+      async () => {
+        const locationId = process.env.KATANA_DEFAULT_LOCATION_ID;
+        console.log("[CronInventorySync] Pushing Katana availability to Reverb...");
+        const result = await runKatanaToReverbSync({
+          locationIds: locationId ? [Number(locationId)] : undefined,
+        });
+
+        setSyncRunSummary({
+          totalConsidered: result.totalConsidered,
+          updated: result.updated,
+          unpublished: result.unpublished,
+          noop: result.noop,
+          skipped: result.skipped,
+          failed: result.failed,
+          writesEnabled: result.writesEnabled,
+        });
+
+        return result;
+      }
+    );
 
     console.log("[CronInventorySync] ========== Inventory push complete ==========");
     return NextResponse.json({
