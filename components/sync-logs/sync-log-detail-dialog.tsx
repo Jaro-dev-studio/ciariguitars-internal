@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { SYNC_TYPE_LABELS } from "@/config/sync-logs";
+import { RAW_PAYLOAD_SYNC_TYPES, SYNC_TYPE_LABELS } from "@/config/sync-logs";
 import {
   DryRunBadge,
   SyncSourceBadge,
@@ -61,9 +61,40 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function JsonBlock({ value }: { value: string }) {
   return (
-    <pre className="overflow-x-auto rounded-md bg-muted/50 p-3 font-mono text-xs">
+    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-3 font-mono text-xs leading-relaxed">
       {value}
     </pre>
+  );
+}
+
+/**
+ * Verbatim third-party payloads get their own block with a dedicated copy
+ * action, since the whole point of capturing them is to inspect and share the
+ * exact shape the sender used.
+ */
+function PayloadBlock({ value }: { value: string }) {
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success("Payload copied to clipboard");
+    } catch {
+      toast.error("Could not copy to clipboard");
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">
+          Payload
+        </p>
+        <Button variant="ghost" size="sm" className="h-7" onClick={handleCopy}>
+          <Copy className="mr-1.5 size-3" />
+          Copy
+        </Button>
+      </div>
+      <JsonBlock value={value} />
+    </div>
   );
 }
 
@@ -90,6 +121,7 @@ export function SyncLogDetailDialog({
 
   const previous = formatJsonValue(log?.previousValue);
   const next = formatJsonValue(log?.newValue);
+  const isRawPayload = log ? RAW_PAYLOAD_SYNC_TYPES.has(log.syncType) : false;
 
   return (
     <Dialog open={!!log} onOpenChange={(open) => !open && onClose()}>
@@ -171,11 +203,14 @@ export function SyncLogDetailDialog({
                 </Field>
               )}
 
-              {next && (
-                <Field label="New value">
-                  <JsonBlock value={next} />
-                </Field>
-              )}
+              {next &&
+                (isRawPayload ? (
+                  <PayloadBlock value={next} />
+                ) : (
+                  <Field label="New value">
+                    <JsonBlock value={next} />
+                  </Field>
+                ))}
 
               {log.errorMessage && (
                 <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3">

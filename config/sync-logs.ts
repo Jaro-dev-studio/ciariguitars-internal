@@ -32,7 +32,14 @@ export const SYNC_TYPE_LABELS: Record<string, string> = {
   ORDER_SYNC: "Order Sync",
   SKU_MAPPING: "SKU Mapping",
   LISTING_UPDATE: "Listing Update",
+  INSTRUMENT_COMPLETED: "Instrument Completed",
 };
+
+/**
+ * Event types whose `newValue` is a verbatim third-party payload rather than a
+ * value we computed, so the detail view labels and renders it as such.
+ */
+export const RAW_PAYLOAD_SYNC_TYPES = new Set(["INSTRUMENT_COMPLETED"]);
 
 export const SOURCE_LABELS: Record<string, string> = {
   CRON: "Cron",
