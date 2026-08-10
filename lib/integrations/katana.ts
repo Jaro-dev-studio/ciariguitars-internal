@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getIntegrationConfig, IntegrationError } from "./config";
+import { fetchWithRetry } from "./http";
 
 export interface KatanaVariant {
   id: number;
@@ -111,7 +112,11 @@ class KatanaClient {
       headers.set("Content-Type", "application/json");
     }
 
-    const response = await fetch(url, { ...init, headers, cache: "no-store" });
+    const response = await fetchWithRetry(
+      url,
+      { ...init, headers, cache: "no-store" },
+      { label: `Katana ${method} ${path}` }
+    );
 
     if (!response.ok) {
       const body = await response.text();

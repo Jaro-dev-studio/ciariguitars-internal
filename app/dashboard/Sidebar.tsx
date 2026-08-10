@@ -15,6 +15,7 @@ import {
   Settings,
   FileText,
   Bug,
+  Inbox,
   Music,
 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
@@ -67,6 +68,7 @@ const allNavigationSections: NavSection[] = [
     items: [
       { href: "/dashboard/integrations", label: "Integrations", icon: Settings, pageKey: "integrations" },
       { href: "/dashboard/sync-logs", label: "Sync Logs", icon: FileText, pageKey: "syncLogs" },
+      { href: "/dashboard/shopflow-events", label: "Shop Flow Events", icon: Inbox, pageKey: "shopflowEvents" },
       { href: "/dashboard/debug-mappings", label: "Debug Mappings", icon: Bug, pageKey: "debugMappings" },
     ],
   },

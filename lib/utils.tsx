@@ -57,6 +57,37 @@ export function formatOrdinalDate(date: Date): string {
   return `${day}${ordinal} ${month} ${year}`;
 }
 
+/**
+ * Each step converts the running value into the next unit up, so the divisor
+ * on a row is what turns that row's unit into the following one: 60 seconds to
+ * a minute, 60 minutes to an hour, and so on. The last entry never divides.
+ */
+const TIME_AGO_UNITS: ReadonlyArray<{ perNext: number; unit: string }> = [
+  { perNext: 60, unit: "second" },
+  { perNext: 60, unit: "minute" },
+  { perNext: 24, unit: "hour" },
+  { perNext: 7, unit: "day" },
+  { perNext: 4.35, unit: "week" },
+  { perNext: 12, unit: "month" },
+  { perNext: Number.POSITIVE_INFINITY, unit: "year" },
+];
+
+/** Renders a past timestamp as "3 minutes ago" / "2 weeks ago". */
+export function formatTimeAgo(date: Date | string | number): string {
+  let value = (Date.now() - new Date(date).getTime()) / 1000;
+  if (value < 60) return "just now";
+
+  for (const { perNext, unit } of TIME_AGO_UNITS) {
+    if (value < perNext) {
+      const rounded = Math.round(value);
+      return `${rounded} ${unit}${rounded === 1 ? "" : "s"} ago`;
+    }
+    value = value / perNext;
+  }
+
+  return "a long time ago";
+}
+
 export const random = (min: number, max: number) => {
   return Math.floor(Math.random() * (max - min + 1) + min);
 };

@@ -8,6 +8,7 @@ import {
   type SyncLogFilters,
   type SyncRunFilters,
 } from "@/config/sync-logs";
+import type { ShopFlowEventFilters } from "@/config/shopflow-events";
 import type {
   IntegrationPlatform,
   Prisma,
@@ -692,6 +693,133 @@ export async function fetchSyncLogs(filters: SyncLogFilters = {}) {
   } catch (error) {
     console.error("[Sync Logs] Error fetching sync logs:", error);
     return { data: null, error: "Failed to fetch sync logs" };
+  }
+}
+
+// ============================================
+// SHOP FLOW EVENTS
+// ============================================
+
+/**
+ * Everything the Shop Flow receiver captures is stored as a SyncLog row
+ * against this platform, so the platform alone identifies a delivery - no
+ * event type filter, which would hide any new kind of payload Shop Flow starts
+ * sending.
+ */
+const SHOPFLOW_PLATFORM = "SHOPFLOW" as IntegrationPlatform;
+
+function buildShopFlowEventWhere(filters: ShopFlowEventFilters) {
+  const where: Prisma.SyncLogWhereInput = { platform: SHOPFLOW_PLATFORM };
+
+  if (filters.status && filters.status !== "all") {
+    where.status = filters.status as SyncStatus;
+  }
+
+  const since = rangeToDate(filters.range);
+  if (since) {
+    where.createdAt = { gte: since };
+  }
+
+  // The payload itself is a Json column and cannot be searched portably, but
+  // the receiver copies any identifiers it recognised into `details`, so that
+  // is what a serial or order number search matches against.
+  const search = filters.search?.trim();
+  if (search) {
+    where.OR = [
+      { details: { contains: search, mode: "insensitive" } },
+      { errorMessage: { contains: search, mode: "insensitive" } },
+    ];
+  }
+
+  return where;
+}
+
+/**
+ * Lists the payloads posted to `/api/webhooks/shopflow`, newest first, plus
+ * the unfiltered totals the page header needs so those counters stay stable
+ * while the user narrows the table.
+ */
+export async function fetchShopFlowEvents(filters: ShopFlowEventFilters = {}) {
+  try {
+    console.log("[ShopFlow Events] Building query from filters:", filters);
+
+    const pageSize = normalisePageSize(filters.pageSize);
+    const requestedPage = Math.max(1, Math.floor(filters.page || 1));
+    const where = buildShopFlowEventWhere(filters);
+
+    console.log("[ShopFlow Events] Counting matching deliveries by status...");
+    const grouped = await prisma.syncLog.groupBy({
+      by: ["status"],
+      where,
+      _count: { _all: true },
+    });
+
+    const statusCounts = grouped.reduce<Record<string, number>>((acc, row) => {
+      acc[row.status] = row._count._all;
+      return acc;
+    }, {});
+    const total = grouped.reduce((sum, row) => sum + row._count._all, 0);
+
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    // Clamp so a stale page number from the URL still returns rows.
+    const page = Math.min(requestedPage, totalPages);
+
+    console.log(
+      `[ShopFlow Events] Fetching page ${page}/${totalPages} (${pageSize} per page)...`
+    );
+    const events = await prisma.syncLog.findMany({
+      where,
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        status: true,
+        details: true,
+        errorMessage: true,
+        newValue: true,
+        createdAt: true,
+        runId: true,
+        run: { select: { trigger: true, triggeredBy: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    console.log("[ShopFlow Events] Loading lifetime delivery totals...");
+    const [allTimeTotal, last24hTotal, latest] = await Promise.all([
+      prisma.syncLog.count({ where: { platform: SHOPFLOW_PLATFORM } }),
+      prisma.syncLog.count({
+        where: {
+          platform: SHOPFLOW_PLATFORM,
+          createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        },
+      }),
+      prisma.syncLog.findFirst({
+        where: { platform: SHOPFLOW_PLATFORM },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      }),
+    ]);
+
+    console.log(
+      `[ShopFlow Events] Fetched ${events.length} of ${total} matching deliveries`
+    );
+    return {
+      data: {
+        events,
+        total,
+        page,
+        pageSize,
+        totalPages,
+        statusCounts,
+        allTimeTotal,
+        last24hTotal,
+        lastReceivedAt: latest?.createdAt ?? null,
+      },
+      error: null,
+    };
+  } catch (error) {
+    console.error("[ShopFlow Events] Error fetching Shop Flow events:", error);
+    return { data: null, error: "Failed to fetch Shop Flow events" };
   }
 }
 

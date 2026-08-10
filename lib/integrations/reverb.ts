@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getIntegrationConfig, IntegrationError } from "./config";
+import { fetchWithRetry } from "./http";
 
 export interface ReverbHalLink {
   href: string;
@@ -127,7 +128,11 @@ class ReverbClient {
       headers.set("Content-Type", "application/hal+json");
     }
 
-    const response = await fetch(url, { ...init, headers, cache: "no-store" });
+    const response = await fetchWithRetry(
+      url,
+      { ...init, headers, cache: "no-store" },
+      { label: `Reverb ${method} ${pathOrUrl}` }
+    );
 
     if (!response.ok) {
       const body = await response.text();

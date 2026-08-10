@@ -19,6 +19,7 @@ import {
   Settings,
   FileText,
   Bug,
+  Inbox,
   Users,
   UserCircle,
 } from "lucide-react";
@@ -39,6 +40,7 @@ const allNavigationItems: NavigationItem[] = [
   { href: "/dashboard/cost-sync", label: "Cost Sync", icon: DollarSign, section: "Inventory", pageKey: "costSync" },
   { href: "/dashboard/integrations", label: "Integrations", icon: Settings, section: "System", pageKey: "integrations" },
   { href: "/dashboard/sync-logs", label: "Sync Logs", icon: FileText, section: "System", pageKey: "syncLogs" },
+  { href: "/dashboard/shopflow-events", label: "Shop Flow Events", icon: Inbox, section: "System", pageKey: "shopflowEvents" },
   { href: "/dashboard/debug-mappings", label: "Debug Mappings", icon: Bug, section: "System", pageKey: "debugMappings" },
   { href: "/dashboard/users", label: "Users", icon: Users, section: "Admin", pageKey: "users" },
   { href: "/dashboard/profile", label: "Profile Settings", icon: UserCircle, pageKey: "profile" },

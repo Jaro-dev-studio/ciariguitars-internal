@@ -9,7 +9,7 @@ import {
   AlertType,
 } from "@prisma/client";
 import prisma from "@/lib/prisma";
-import { getIntegrationConfig } from "./config";
+import { getIntegrationConfig, IntegrationError } from "./config";
 import { katana, netAvailable, type KatanaInventory } from "./katana";
 import { reverb, type ReverbListing } from "./reverb";
 import { listSyncableItems } from "./sku-resolver";
@@ -237,16 +237,16 @@ export async function runKatanaToReverbSync(options: {
         },
       }).catch((e) => console.error("[ReverbSync] local cache update failed:", e));
 
-      // Recovery: this SKU synced cleanly against Reverb, so clear any prior
-      // failure alert for it. Only when writes are live, since the failure
-      // alert is only ever recorded on a real (non-dry-run) write attempt.
-      if (writesEnabled) {
-        await clearAlerts({
-          type: AlertType.SYNC_FAILURE,
-          relatedPlatform: IntegrationPlatform.REVERB,
-          relatedSku: item.canonicalSku,
-        });
-      }
+      // Recovery: this SKU resolved and synced cleanly against Reverb, so clear
+      // any prior failure alert for it. This runs in dry runs too, because the
+      // failure alert is also raised when merely *reading* the listing fails -
+      // otherwise a one-off Reverb error would leave an alert up until the
+      // retention cron eventually pruned it.
+      await clearAlerts({
+        type: AlertType.SYNC_FAILURE,
+        relatedPlatform: IntegrationPlatform.REVERB,
+        relatedSku: item.canonicalSku,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       itemResult.action = "failed";
@@ -545,8 +545,17 @@ async function loadReverbListing(
     try {
       return await reverb.getListingByHref(`/listings/${listingId}`);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Only a missing listing (stale mapping) justifies the SKU search. Any
+      // other failure - auth, rate limit, Reverb outage - would fail the same
+      // way on the fallback and just obscures the real error message.
+      const isMissing = err instanceof IntegrationError && err.status === 404;
+      if (!isMissing) {
+        console.error(`[ReverbSync] listing fetch failed for ${listingId}: ${msg}`);
+        throw err;
+      }
       console.warn(
-        `[ReverbSync] direct listing fetch failed for ${listingId}, falling back to SKU lookup`
+        `[ReverbSync] listing ${listingId} not found on Reverb (${msg}), falling back to SKU lookup`
       );
     }
   }
