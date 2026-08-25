@@ -92,7 +92,8 @@ function group<T>(items: T[], key: (i: T) => string | null): Map<string, T[]> {
 export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
   console.log("[MappingDiagnostics] Loading staging catalogs and mappings...");
   const [katana, reverb, mappings] = await Promise.all([
-    prisma.katanaCatalogVariant.findMany(),
+    // Finished goods only - materials are Shop Flow's concern, not Reverb's.
+    prisma.katanaCatalogVariant.findMany({ where: { variantType: "product" } }),
     prisma.reverbCatalogListing.findMany(),
     prisma.sKUMapping.findMany(),
   ]);

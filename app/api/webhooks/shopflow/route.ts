@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import {
   IntegrationPlatform,
@@ -6,75 +7,86 @@ import {
   SyncSource,
   SyncType,
 } from "@prisma/client";
+import { getIntegrationConfig } from "@/lib/integrations/config";
 import { recordSyncLog } from "@/lib/integrations/sync-logger";
 import { setSyncRunSummary, withSyncRun } from "@/lib/integrations/sync-run";
+import { parseWorkOrder } from "@/lib/shopflow/contract";
+import { processWorkOrder } from "@/lib/shopflow/process-work-order";
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 /** Rejects oversized bodies before parsing so the endpoint cannot be used to dump data. */
-const MAX_BODY_BYTES = 256 * 1024;
+const MAX_BODY_BYTES = 512 * 1024;
 
 /**
- * Keys Shop Flow might use to identify the finished instrument. Checked in
- * order and case-insensitively so the endpoint stays useful whatever shape the
- * payload arrives in.
+ * Headers Shop Flow might carry the shared secret in. Their format is not yet
+ * agreed, so several conventions are accepted.
  */
-const IDENTIFIER_KEYS = [
-  "serialNumber",
-  "serial",
-  "instrumentId",
-  "instrument",
-  "sku",
-  "model",
-  "orderNumber",
-  "orderId",
-  "workOrder",
-  "id",
+const SECRET_HEADERS = [
+  "x-shopflow-secret",
+  "x-shopflow-signature",
+  "x-webhook-secret",
 ];
 
-/**
- * Pulls the first recognisable identifier out of an arbitrary payload. Used to
- * build a human-readable summary line, which is also what the sync events
- * search box matches against.
- */
-function findIdentifiers(payload: unknown): string[] {
-  if (!payload || typeof payload !== "object") return [];
-
-  const flat = new Map<string, string>();
-  const visit = (value: unknown, depth: number) => {
-    if (depth > 3 || !value || typeof value !== "object") return;
-    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      if (entry === null || entry === undefined) continue;
-      if (typeof entry === "object") {
-        visit(entry, depth + 1);
-        continue;
-      }
-      const normalised = key.toLowerCase().replace(/[_-]/g, "");
-      if (!flat.has(normalised)) flat.set(normalised, String(entry));
-    }
-  };
-  visit(payload, 0);
-
-  return IDENTIFIER_KEYS.reduce<string[]>((found, key) => {
-    const value = flat.get(key.toLowerCase());
-    if (value && found.length < 3) found.push(`${key}=${value}`);
-    return found;
-  }, []);
+function equals(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
 }
 
 /**
- * Public receiver for Shop Flow "instrument completed" notifications.
+ * Verifies the shared secret when one is configured.
  *
- * Deliberately unauthenticated and schema-agnostic: Shop Flow can POST any JSON
- * shape and it is stored verbatim as an informational sync event. Nothing here
- * writes to Katana or Reverb - it exists so the team can see what Shop Flow is
- * sending while the integration is specced out.
+ * Enforcement is conditional on purpose: Shop Flow is already posting live
+ * production data and has not yet been issued a secret, so hard-requiring one
+ * today would silently drop real work orders. Setting SHOPFLOW_WEBHOOK_SECRET
+ * turns enforcement on without a code change.
+ */
+function checkAuth(request: NextRequest): { ok: boolean; enforced: boolean } {
+  const expected = getIntegrationConfig().shopflow.webhookSecret;
+  if (!expected) return { ok: true, enforced: false };
+
+  for (const header of SECRET_HEADERS) {
+    const value = request.headers.get(header);
+    if (value && equals(value, expected)) return { ok: true, enforced: true };
+  }
+
+  const auth = request.headers.get("authorization");
+  if (auth?.startsWith("Bearer ") && equals(auth.slice(7), expected)) {
+    return { ok: true, enforced: true };
+  }
+
+  return { ok: false, enforced: true };
+}
+
+/**
+ * Receiver for Shop Flow completed work orders.
  *
- * Always answers 200, including for malformed bodies, so a sender that retries
- * on error does not queue up duplicates over a payload we already captured.
+ * The raw payload is always captured first, whatever its shape, so nothing is
+ * lost if the contract drifts. Recognised work orders are then processed:
+ * parts are resolved against Katana and, when everything maps and writes are
+ * enabled, booked as a single stock adjustment.
+ *
+ * Answers 200 for anything it managed to capture, so a sender that retries on
+ * error does not queue duplicates of a payload already stored.
  */
 export async function POST(request: NextRequest) {
   try {
+    const auth = checkAuth(request);
+    if (!auth.ok) {
+      console.warn("[ShopFlowWebhook] Rejected request with invalid secret");
+      return NextResponse.json(
+        { data: null, error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+    if (!auth.enforced) {
+      console.warn(
+        "[ShopFlowWebhook] SHOPFLOW_WEBHOOK_SECRET is not set - endpoint is accepting unauthenticated posts"
+      );
+    }
+
     const raw = await request.text();
 
     if (raw.length > MAX_BODY_BYTES) {
@@ -87,8 +99,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Any shape is acceptable. Non-JSON bodies are kept verbatim rather than
-    // dropped, so nothing Shop Flow sends is ever lost.
     let payload: unknown;
     let isJson = true;
     try {
@@ -98,50 +108,112 @@ export async function POST(request: NextRequest) {
       payload = { raw };
     }
 
-    const identifiers = findIdentifiers(payload);
-    console.log(
-      `[ShopFlowWebhook] Received completion event${identifiers.length ? ` (${identifiers.join(", ")})` : ""}`
-    );
+    const parsed = parseWorkOrder(payload);
+    const label = parsed.data
+      ? `invoice ${parsed.data.invoiceId} (${parsed.data.instrumentType}${parsed.data.serialNumber ? `, serial ${parsed.data.serialNumber}` : ""})`
+      : "unrecognised payload";
+    console.log(`[ShopFlowWebhook] Received ${label}`);
 
     const result = await withSyncRun(
       {
         source: SyncSource.WEBHOOK,
         trigger: "webhook:shopflow",
-        triggeredBy: "instrument.completed",
+        triggeredBy: parsed.data ? "work-order.completed" : "unknown",
       },
       async () => {
-        console.log("[ShopFlowWebhook] Recording completion event...");
+        console.log("[ShopFlowWebhook] Recording raw event...");
         const log = await recordSyncLog({
           syncType: SyncType.INSTRUMENT_COMPLETED,
           platform: IntegrationPlatform.SHOPFLOW,
-          // Informational: the event was captured, nothing was synced.
           status: SyncStatus.SUCCESS,
           direction: SyncDirection.INBOUND,
           newValue: payload as object,
-          details: identifiers.length
-            ? `Shop Flow instrument completed (${identifiers.join(", ")})`
-            : "Shop Flow instrument completed",
+          details: `Shop Flow work order received - ${label}`,
         });
 
-        setSyncRunSummary({
-          recorded: Boolean(log),
-          isJson,
-          bytes: raw.length,
-          ...(identifiers.length ? { identifiers: identifiers.join(", ") } : {}),
-        });
+        // Capturing the payload is the baseline job; a failed write must not be
+        // reported as a successful run.
+        if (!log) throw new Error("Shop Flow event could not be persisted");
 
-        // Capturing the payload is the entire job, so a failed write must not
-        // be reported as a successful run - surface it against the run instead.
-        if (!log) {
-          throw new Error("Shop Flow event could not be persisted");
+        if (!parsed.data) {
+          console.warn(
+            `[ShopFlowWebhook] Payload not recognised as a work order: ${parsed.error}`
+          );
+          setSyncRunSummary({
+            recorded: true,
+            isJson,
+            bytes: raw.length,
+            processed: false,
+            parseError: parsed.error,
+          });
+          return { eventId: log.id, processed: false as const };
         }
 
-        return { eventId: log.id };
+        // Processing must never lose the captured event, so failures here are
+        // reported against the run rather than thrown away.
+        try {
+          console.log("[ShopFlowWebhook] Processing work order...");
+          const processed = await processWorkOrder(parsed.data, payload);
+
+          setSyncRunSummary({
+            recorded: true,
+            isJson,
+            bytes: raw.length,
+            processed: true,
+            invoiceId: processed.invoiceId,
+            isBuild: processed.isBuild,
+            isRedelivery: processed.isRedelivery,
+            deliveryCount: processed.deliveryCount,
+            status: processed.status,
+            partsResolved: processed.parts.resolved,
+            partsUnresolved: processed.parts.unresolved,
+            stockApplied: processed.stock.applied,
+            ...(processed.stock.adjustmentId
+              ? { stockAdjustmentId: processed.stock.adjustmentId }
+              : {}),
+          });
+
+          return { eventId: log.id, processed: true as const, result: processed };
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Unknown error";
+          console.error("[ShopFlowWebhook] Processing failed:", message);
+          await recordSyncLog({
+            syncType: SyncType.PRODUCTION_CONSUMPTION,
+            platform: IntegrationPlatform.SHOPFLOW,
+            status: SyncStatus.FAILED,
+            direction: SyncDirection.INBOUND,
+            newValue: { invoiceId: parsed.data.invoiceId },
+            errorMessage: message,
+            details: `Failed to process Shop Flow ${label}`,
+          });
+          setSyncRunSummary({
+            recorded: true,
+            isJson,
+            bytes: raw.length,
+            processed: false,
+            processingError: message,
+          });
+          return { eventId: log.id, processed: false as const };
+        }
       }
     );
 
     return NextResponse.json({
-      data: { received: true, eventId: result.eventId },
+      data: {
+        received: true,
+        eventId: result.eventId,
+        processed: result.processed,
+        ...(result.processed
+          ? {
+            invoiceId: result.result.invoiceId,
+            status: result.result.status,
+            partsResolved: result.result.parts.resolved,
+            partsUnresolved: result.result.parts.unresolved,
+            stockApplied: result.result.stock.applied,
+          }
+          : {}),
+      },
       error: null,
     });
   } catch (error) {

@@ -676,10 +676,18 @@ model KatanaCatalogVariant {
   variantName  String?
   sku          String?
   isSellable   Boolean @default(true)
+  // Katana splits finished goods ("product") from components ("material").
+  // Shop Flow part numbers resolve against materials, so both are imported.
+  variantType  String  @default("product")
+  // sku with punctuation and case stripped, so "MTE1.0-145 Rev B" matches
+  // Katana's "MTE1.0-145_RevB" without a scan at resolution time.
+  normalisedSku String?
 
   lastImportedAt DateTime @default(now())
 
   @@index([sku])
+  @@index([normalisedSku])
+  @@index([variantType])
 }
 
 model ReverbCatalogListing {
@@ -700,4 +708,92 @@ model ReverbCatalogListing {
   lastImportedAt DateTime @default(now())
 
   @@index([state])
+}
+
+// ============================================
+// SHOP FLOW WORK ORDERS
+// ============================================
+
+// One row per Shop Flow work order (their Invoice Id, confirmed stable).
+//
+// Shop Flow re-sends a work order whenever it is reopened and completed again,
+// so this doubles as the idempotency guard and the record of what was actually
+// booked - a redelivery applies only the difference against bookedParts.
+model ShopFlowWorkOrder {
+  id String @id @default(cuid())
+
+  invoiceId      String  @unique
+  // "build" produces new stock; "instrument" is a repair on a customer's own
+  // guitar and must never increment finished goods.
+  instrumentType String
+  serialNumber   String?
+  instrumentName String?
+  model          String?
+  submodel       String?
+
+  // Derived from the payload rather than sent by Shop Flow.
+  finish         String?
+  orientation    String?
+  resolvedSku    String?
+
+  status         ShopFlowWorkOrderStatus @default(RECEIVED)
+  blockedReason  String?
+
+  deliveryCount  Int      @default(1)
+  /// Parts booked so far: Array<{ partId, katanaSku, variantId, quantity }>
+  bookedParts    Json?
+  bookedAt       DateTime?
+  stockAdjustmentId String?
+
+  /// Resolution outcome for the most recent delivery, for the events UI.
+  resolutionSummary Json?
+  /// Most recent payload, so a work order can be reprocessed after its part
+  /// mappings are filled in without waiting for Shop Flow to resend it.
+  lastPayload       Json?
+
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
+  @@index([instrumentType])
+  @@index([lastSeenAt])
+  @@index([serialNumber])
+}
+
+enum ShopFlowWorkOrderStatus {
+  /// Captured but not yet processed.
+  RECEIVED
+  /// Every part resolved; ready to book.
+  RESOLVED
+  /// Some parts could not be mapped to Katana.
+  NEEDS_MAPPING
+  /// A repair, so parts consume stock but no finished good is produced.
+  REPAIR
+  /// Stock movement recorded in Katana.
+  BOOKED
+  /// Cannot proceed - see blockedReason.
+  BLOCKED
+}
+
+// Overrides for Shop Flow part numbers that do not resolve against the Katana
+// catalogue on their own, plus an ignore list for packaging, tooling and the
+// colour option lines that ride along in the Parts array but are not stock.
+model ShopFlowPartMapping {
+  id String @id @default(cuid())
+
+  shopflowPartId String  @unique
+  partName       String?
+
+  katanaSku       String?
+  katanaVariantId String?
+
+  isIgnored Boolean @default(false)
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([katanaSku])
+  @@index([isIgnored])
 }

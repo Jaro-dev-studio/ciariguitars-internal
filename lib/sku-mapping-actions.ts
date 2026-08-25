@@ -8,6 +8,7 @@ import { authOptions } from "@/authOptions";
 import { katana } from "@/lib/integrations/katana";
 import { reverb } from "@/lib/integrations/reverb";
 import { autoMatchByExactSkuCore, normalizeSku } from "@/lib/sku-mapping-core";
+import { normalisePartCode } from "@/lib/shopflow/part-matching";
 import type { ExactMatchResultItem } from "@/lib/sku-mapping-core";
 import { computeMappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
 import type { MappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
@@ -60,6 +61,8 @@ export async function importCatalogs(): Promise<{
                 .join(" / ") || null,
               sku: variant.sku,
               isSellable: product.is_sellable,
+              variantType: "product",
+              normalisedSku: normalisePartCode(variant.sku) || null,
             },
             update: {
               productId: String(product.id),
@@ -69,6 +72,8 @@ export async function importCatalogs(): Promise<{
                 .join(" / ") || null,
               sku: variant.sku,
               isSellable: product.is_sellable,
+              variantType: "product",
+              normalisedSku: normalisePartCode(variant.sku) || null,
               lastImportedAt: new Date(),
             },
           });
@@ -78,7 +83,58 @@ export async function importCatalogs(): Promise<{
       if (products.length < 250) keepGoing = false;
       else page++;
     }
-    console.log(`[SKUImport] Imported ${katanaCount} Katana variants`);
+    console.log(`[SKUImport] Imported ${katanaCount} Katana product variants`);
+
+    // --- Katana materials -> variants ---
+    // Components never appear under /products, so they are fetched separately.
+    // Shop Flow work orders consume these, not finished goods.
+    console.log("[SKUImport] Fetching Katana materials...");
+    let materialCount = 0;
+    let mPage = 1;
+    let mKeepGoing = true;
+    while (mKeepGoing) {
+      const variants = await katana.listVariants({
+        type: "material",
+        limit: 250,
+        page: mPage,
+      });
+      if (variants.length === 0) break;
+      for (const variant of variants) {
+        const label =
+          (variant.config_attributes ?? [])
+            .map((a) => a.config_value)
+            .join(" / ") || null;
+        await prisma.katanaCatalogVariant.upsert({
+          where: { variantId: String(variant.id) },
+          create: {
+            variantId: String(variant.id),
+            productId: variant.material_id ? String(variant.material_id) : null,
+            // Materials carry no product name; the SKU is the usable label.
+            productName: variant.sku ?? `Material ${variant.id}`,
+            variantName: label,
+            sku: variant.sku,
+            isSellable: false,
+            variantType: "material",
+            normalisedSku: normalisePartCode(variant.sku) || null,
+          },
+          update: {
+            productId: variant.material_id ? String(variant.material_id) : null,
+            productName: variant.sku ?? `Material ${variant.id}`,
+            variantName: label,
+            sku: variant.sku,
+            isSellable: false,
+            variantType: "material",
+            normalisedSku: normalisePartCode(variant.sku) || null,
+            lastImportedAt: new Date(),
+          },
+        });
+        materialCount++;
+      }
+      if (variants.length < 250) mKeepGoing = false;
+      else mPage++;
+    }
+    katanaCount += materialCount;
+    console.log(`[SKUImport] Imported ${materialCount} Katana material variants`);
 
     // --- Reverb listings ---
     console.log("[SKUImport] Fetching Reverb listings...");
@@ -585,7 +641,10 @@ export async function fetchMappingData(): Promise<{
         include: { skuMappings: true },
         orderBy: { updatedAt: "desc" },
       }),
-      prisma.katanaCatalogVariant.findMany({ orderBy: { productName: "asc" } }),
+      prisma.katanaCatalogVariant.findMany({
+        where: { variantType: "product" },
+        orderBy: { productName: "asc" },
+      }),
       prisma.reverbCatalogListing.findMany({ orderBy: { title: "asc" } }),
     ]);
 

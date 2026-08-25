@@ -42,7 +42,9 @@ export async function autoMatchByExactSkuCore(): Promise<ExactMatchResult> {
   console.log("[SKUMapping] Auto-matching by exact SKU...");
 
   const [katanaCatalog, reverbCatalog, existingMappings] = await Promise.all([
-    prisma.katanaCatalogVariant.findMany(),
+    // Materials share this table but are never sold on Reverb, so they must
+    // stay out of the matching pool.
+    prisma.katanaCatalogVariant.findMany({ where: { variantType: "product" } }),
     prisma.reverbCatalogListing.findMany(),
     prisma.sKUMapping.findMany(),
   ]);

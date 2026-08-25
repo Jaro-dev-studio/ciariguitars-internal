@@ -197,7 +197,10 @@ export async function GET(request: NextRequest) {
     // many have a SKU and how many of those exact-match a Katana variant SKU?
     console.log("[HasInventoryCheck] Computing exact-SKU coverage...");
     const [katanaStaged, syncableListings] = await Promise.all([
-      prisma.katanaCatalogVariant.findMany({ select: { sku: true } }),
+      prisma.katanaCatalogVariant.findMany({
+        where: { variantType: "product" },
+        select: { sku: true },
+      }),
       prisma.reverbCatalogListing.findMany({
         where: { NOT: { hasInventory: false } },
         select: { sku: true },

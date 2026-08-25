@@ -823,6 +823,69 @@ export async function fetchShopFlowEvents(filters: ShopFlowEventFilters = {}) {
   }
 }
 
+/**
+ * Lists Shop Flow work orders with their Katana resolution outcome.
+ *
+ * Distinct from the raw event feed: one row per Shop Flow invoice rather than
+ * per delivery, since a work order can be reopened and resent several times.
+ */
+export async function fetchShopFlowWorkOrders(limit = 50) {
+  try {
+    console.log("[ShopFlow Work Orders] Loading work orders...");
+
+    const [workOrders, grouped] = await Promise.all([
+      prisma.shopFlowWorkOrder.findMany({
+        take: limit,
+        orderBy: { lastSeenAt: "desc" },
+      }),
+      prisma.shopFlowWorkOrder.groupBy({
+        by: ["status"],
+        _count: { _all: true },
+      }),
+    ]);
+
+    const statusCounts = grouped.reduce<Record<string, number>>((acc, row) => {
+      acc[row.status] = row._count._all;
+      return acc;
+    }, {});
+
+    // Every part id still waiting on a mapping, most frequently seen first, so
+    // the biggest blockers are obvious.
+    const unmappedCounts = new Map<string, { partName: string | null; count: number }>();
+    for (const order of workOrders) {
+      const summary = order.resolutionSummary as {
+        unresolved?: Array<{ partId?: string; partName?: string | null }>;
+      } | null;
+      for (const part of summary?.unresolved ?? []) {
+        if (!part?.partId) continue;
+        const existing = unmappedCounts.get(part.partId);
+        if (existing) existing.count += 1;
+        else
+          unmappedCounts.set(part.partId, {
+            partName: part.partName ?? null,
+            count: 1,
+          });
+      }
+    }
+
+    const unmappedParts = [...unmappedCounts.entries()]
+      .map(([partId, value]) => ({ partId, ...value }))
+      .sort((a, b) => b.count - a.count);
+
+    console.log(
+      `[ShopFlow Work Orders] Loaded ${workOrders.length} work orders, ${unmappedParts.length} distinct unmapped part(s)`
+    );
+
+    return {
+      data: { workOrders, statusCounts, unmappedParts },
+      error: null,
+    };
+  } catch (error) {
+    console.error("[ShopFlow Work Orders] Error fetching work orders:", error);
+    return { data: null, error: "Failed to fetch Shop Flow work orders" };
+  }
+}
+
 // ============================================
 // SYNC RUNS
 // ============================================

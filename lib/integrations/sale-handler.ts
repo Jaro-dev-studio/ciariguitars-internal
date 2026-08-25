@@ -11,6 +11,7 @@ import {
 import prisma from "@/lib/prisma";
 import { getIntegrationConfig } from "./config";
 import { katana } from "./katana";
+import { resolveDefaultLocationId } from "./katana-location";
 import { reverb, type ReverbOrder } from "./reverb";
 import { resolveByReverbListingId, resolveByReverbSku } from "./sku-resolver";
 import { recordSyncLog, recordAlert, touchIntegrationLastSync } from "./sync-logger";
@@ -248,19 +249,4 @@ export async function pollReverbOrders(opts: { sinceHours?: number } = {}) {
 
   console.log(`[ReverbSale] Poll complete - ${processed.length} new order(s) processed`);
   return processed;
-}
-
-async function resolveDefaultLocationId(): Promise<number> {
-  const fromEnv = process.env.KATANA_DEFAULT_LOCATION_ID;
-  if (fromEnv && Number.isFinite(Number(fromEnv))) return Number(fromEnv);
-
-  try {
-    const locations = await katana.listLocations();
-    if (locations[0]) return locations[0].id;
-  } catch (err) {
-    console.error("[ReverbSale] Could not resolve Katana location:", err);
-  }
-  throw new Error(
-    "No Katana location available; set KATANA_DEFAULT_LOCATION_ID"
-  );
 }

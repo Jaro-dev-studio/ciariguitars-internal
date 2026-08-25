@@ -6,6 +6,8 @@ import { fetchWithRetry } from "./http";
 export interface KatanaVariant {
   id: number;
   product_id: number;
+  /** Set instead of product_id when the variant is a component. */
+  material_id?: number | null;
   sku: string | null;
   sales_price: number | null;
   purchase_price: number | null;
@@ -188,6 +190,28 @@ class KatanaClient {
     }
     const result = await this.request<KatanaListResponse<KatanaInventory>>(
       `/inventory?${params.toString()}`
+    );
+    return result.data ?? [];
+  }
+
+  /**
+   * Lists variants directly rather than through /products.
+   *
+   * Katana models components as "material" variants, which never appear under
+   * /products - so this is the only way to reach the part numbers Shop Flow
+   * sends on a work order.
+   */
+  async listVariants(opts: {
+    type?: "product" | "material";
+    limit?: number;
+    page?: number;
+  } = {}): Promise<KatanaVariant[]> {
+    const params = new URLSearchParams();
+    params.set("limit", String(opts.limit ?? 250));
+    if (opts.page !== undefined) params.set("page", String(opts.page));
+    if (opts.type) params.set("type", opts.type);
+    const result = await this.request<KatanaListResponse<KatanaVariant>>(
+      `/variants?${params.toString()}`
     );
     return result.data ?? [];
   }
