@@ -5,10 +5,8 @@ import { IntegrationPlatform } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/authOptions";
-import { katana } from "@/lib/integrations/katana";
-import { reverb } from "@/lib/integrations/reverb";
 import { autoMatchByExactSkuCore, normalizeSku } from "@/lib/sku-mapping-core";
-import { normalisePartCode } from "@/lib/shopflow/part-matching";
+import { importCatalogsCore } from "@/lib/sku-mapping-import";
 import type { ExactMatchResultItem } from "@/lib/sku-mapping-core";
 import { computeMappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
 import type { MappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
@@ -38,149 +36,10 @@ export async function importCatalogs(): Promise<{
     const userId = await requireAuth();
     if (!userId) return { data: null, error: "Not authenticated" };
 
-    console.log("[SKUImport] Starting catalog import from Katana and Reverb...");
-
-    // --- Katana products -> variants ---
-    console.log("[SKUImport] Fetching Katana products...");
-    let katanaCount = 0;
-    let page = 1;
-    let keepGoing = true;
-    while (keepGoing) {
-      const products = await katana.listProducts({ limit: 250, page });
-      if (products.length === 0) break;
-      for (const product of products) {
-        for (const variant of product.variants ?? []) {
-          await prisma.katanaCatalogVariant.upsert({
-            where: { variantId: String(variant.id) },
-            create: {
-              variantId: String(variant.id),
-              productId: String(product.id),
-              productName: product.name,
-              variantName: (variant.config_attributes ?? [])
-                .map((a) => a.config_value)
-                .join(" / ") || null,
-              sku: variant.sku,
-              isSellable: product.is_sellable,
-              variantType: "product",
-              normalisedSku: normalisePartCode(variant.sku) || null,
-            },
-            update: {
-              productId: String(product.id),
-              productName: product.name,
-              variantName: (variant.config_attributes ?? [])
-                .map((a) => a.config_value)
-                .join(" / ") || null,
-              sku: variant.sku,
-              isSellable: product.is_sellable,
-              variantType: "product",
-              normalisedSku: normalisePartCode(variant.sku) || null,
-              lastImportedAt: new Date(),
-            },
-          });
-          katanaCount++;
-        }
-      }
-      if (products.length < 250) keepGoing = false;
-      else page++;
-    }
-    console.log(`[SKUImport] Imported ${katanaCount} Katana product variants`);
-
-    // --- Katana materials -> variants ---
-    // Components never appear under /products, so they are fetched separately.
-    // Shop Flow work orders consume these, not finished goods.
-    console.log("[SKUImport] Fetching Katana materials...");
-    let materialCount = 0;
-    let mPage = 1;
-    let mKeepGoing = true;
-    while (mKeepGoing) {
-      const variants = await katana.listVariants({
-        type: "material",
-        limit: 250,
-        page: mPage,
-      });
-      if (variants.length === 0) break;
-      for (const variant of variants) {
-        const label =
-          (variant.config_attributes ?? [])
-            .map((a) => a.config_value)
-            .join(" / ") || null;
-        await prisma.katanaCatalogVariant.upsert({
-          where: { variantId: String(variant.id) },
-          create: {
-            variantId: String(variant.id),
-            productId: variant.material_id ? String(variant.material_id) : null,
-            // Materials carry no product name; the SKU is the usable label.
-            productName: variant.sku ?? `Material ${variant.id}`,
-            variantName: label,
-            sku: variant.sku,
-            isSellable: false,
-            variantType: "material",
-            normalisedSku: normalisePartCode(variant.sku) || null,
-          },
-          update: {
-            productId: variant.material_id ? String(variant.material_id) : null,
-            productName: variant.sku ?? `Material ${variant.id}`,
-            variantName: label,
-            sku: variant.sku,
-            isSellable: false,
-            variantType: "material",
-            normalisedSku: normalisePartCode(variant.sku) || null,
-            lastImportedAt: new Date(),
-          },
-        });
-        materialCount++;
-      }
-      if (variants.length < 250) mKeepGoing = false;
-      else mPage++;
-    }
-    katanaCount += materialCount;
-    console.log(`[SKUImport] Imported ${materialCount} Katana material variants`);
-
-    // --- Reverb listings ---
-    console.log("[SKUImport] Fetching Reverb listings...");
-    let reverbCount = 0;
-    let rPage = 1;
-    let rTotalPages = 1;
-    do {
-      const resp = await reverb.listMyListings({ page: rPage, perPage: 50, state: "all" });
-      rTotalPages = resp.total_pages ?? 1;
-      for (const l of resp.listings ?? []) {
-        await prisma.reverbCatalogListing.upsert({
-          where: { listingId: String(l.id) },
-          create: {
-            listingId: String(l.id),
-            title: l.title,
-            make: l.make,
-            model: l.model,
-            finish: (l as { finish?: string }).finish ?? null,
-            state: l.state?.slug ?? null,
-            inventory: l.inventory ?? null,
-            hasInventory: l.has_inventory ?? null,
-            sku: l.sku,
-          },
-          update: {
-            title: l.title,
-            make: l.make,
-            model: l.model,
-            finish: (l as { finish?: string }).finish ?? null,
-            state: l.state?.slug ?? null,
-            inventory: l.inventory ?? null,
-            hasInventory: l.has_inventory ?? null,
-            sku: l.sku,
-            lastImportedAt: new Date(),
-          },
-        });
-        reverbCount++;
-      }
-      rPage++;
-    } while (rPage <= rTotalPages);
-    console.log(`[SKUImport] Imported ${reverbCount} Reverb listings`);
+    const imported = await importCatalogsCore();
 
     revalidatePath("/dashboard/sku-mapping");
-    return {
-      data: { katanaVariants: katanaCount, reverbListings: reverbCount },
-      error: null,
-    };
+    return { data: imported, error: null };
   } catch (error) {
     console.error("[SKUImport] Import failed:", error);
     return {
@@ -252,12 +111,9 @@ export async function syncMappings(): Promise<{
 
     console.log("[SKUMapping] Sync mappings: importing catalogs then auto-matching by exact SKU...");
 
-    const imported = await importCatalogs();
-    if (imported.error || !imported.data) {
-      return { data: null, error: imported.error ?? "Catalog import failed" };
-    }
+    const imported = await importCatalogsCore();
     console.log(
-      `[SKUMapping] Sync mappings: imported ${imported.data.katanaVariants} Katana variants, ${imported.data.reverbListings} Reverb listings`
+      `[SKUMapping] Sync mappings: imported ${imported.katanaVariants} Katana variants, ${imported.reverbListings} Reverb listings`
     );
 
     const match = await autoMatchByExactSkuCore();
@@ -268,8 +124,8 @@ export async function syncMappings(): Promise<{
     revalidatePath("/dashboard/sku-mapping");
     return {
       data: {
-        katanaVariants: imported.data.katanaVariants,
-        reverbListings: imported.data.reverbListings,
+        katanaVariants: imported.katanaVariants,
+        reverbListings: imported.reverbListings,
         created: match.created,
         ambiguous: match.ambiguous,
         skipped: match.skipped,
