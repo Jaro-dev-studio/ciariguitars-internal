@@ -234,13 +234,17 @@ class ReverbClient {
     page?: number;
     perPage?: number;
     status?: "all" | "unpaid" | "unshipped" | "shipped";
-    createdSince?: string;
+    /**
+     * ISO 8601. Reverb's documented order date filter is on updated time, so
+     * this also returns older orders whose status changed in the window.
+     */
+    updatedSince?: string;
   } = {}): Promise<ReverbOrdersResponse> {
     const params = new URLSearchParams();
     params.set("page", String(opts.page ?? 1));
     params.set("per_page", String(opts.perPage ?? 50));
     if (opts.status) params.set("status", opts.status);
-    if (opts.createdSince) params.set("created_after", opts.createdSince);
+    if (opts.updatedSince) params.set("updated_start_date", opts.updatedSince);
     return this.request<ReverbOrdersResponse>(
       `/my/orders/selling/all?${params.toString()}`
     );

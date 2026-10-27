@@ -12,6 +12,7 @@ import prisma from "@/lib/prisma";
 import { getIntegrationConfig, IntegrationError } from "./config";
 import { katana, netAvailable, type KatanaInventory } from "./katana";
 import { reverb, type ReverbListing } from "./reverb";
+import { pendingReverbSalesByListing } from "./sale-handler";
 import { listSyncableItems } from "./sku-resolver";
 import { recordSyncLog, recordAlert, clearAlerts, touchIntegrationLastSync } from "./sync-logger";
 
@@ -41,10 +42,10 @@ export interface ReverbSyncRunResult {
 
 /**
  * Pushes Katana "available to sell" (in_stock - committed) quantities onto the
- * matching Reverb listings. When Katana availability hits 0 the Reverb listing
- * is unpublished (per client decision). All writes respect the Reverb feature
- * flag - with writes off, we run a full dry-run and log exactly what WOULD
- * happen without touching Reverb.
+ * matching Reverb listings, minus any Reverb sales not booked in Katana yet.
+ * When availability hits 0 the Reverb listing is unpublished (per client
+ * decision). All writes respect the Reverb feature flag - with writes off, we
+ * run a full dry-run and log exactly what WOULD happen without touching Reverb.
  */
 export async function runKatanaToReverbSync(options: {
   locationIds?: number[];
@@ -81,6 +82,39 @@ export async function runKatanaToReverbSync(options: {
   result.totalConsidered = syncable.length;
 
   console.log(`[ReverbSync] Resolving inventory for ${syncable.length} mapped items...`);
+
+  // Read unbooked Reverb sales BEFORE Katana: a decrement landing in between
+  // is then held back for one extra run instead of missed, which would put
+  // the sold guitar back on sale.
+  let pendingByListing = new Map<string, number>();
+  try {
+    pendingByListing = await pendingReverbSalesByListing();
+    await clearAlerts({
+      type: AlertType.CONNECTION_ERROR,
+      relatedPlatform: IntegrationPlatform.REVERB,
+      relatedSku: null,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.error("[ReverbSync] Failed to read recent Reverb orders:", msg);
+    await recordSyncLog({
+      syncType: SyncType.ORDER_SYNC,
+      platform: IntegrationPlatform.REVERB,
+      status: SyncStatus.FAILED,
+      direction: SyncDirection.INBOUND,
+      errorMessage: msg,
+      details: "Could not read recent Reverb orders; push skipped so a sold guitar is not relisted",
+    });
+    await recordAlert({
+      type: AlertType.CONNECTION_ERROR,
+      severity: AlertSeverity.ERROR,
+      title: "Reverb order fetch failed",
+      message: msg,
+      relatedPlatform: IntegrationPlatform.REVERB,
+    });
+    result.finishedAt = new Date().toISOString();
+    return result;
+  }
 
   // Pull Katana inventory in one batch keyed by variant id.
   const variantIds = syncable
@@ -126,7 +160,9 @@ export async function runKatanaToReverbSync(options: {
   for (const item of syncable) {
     const variantId = Number(item.katanaVariantId);
     const inv = inventoryByVariant.get(variantId);
-    const targetQty = inv ? netAvailable(inv) : 0;
+    const katanaQty = inv ? netAvailable(inv) : 0;
+    const heldBack = heldBackFor(item.reverbListingId, pendingByListing);
+    const targetQty = Math.max(0, katanaQty - heldBack);
 
     const itemResult: ReverbSyncItemResult = {
       canonicalSku: item.canonicalSku,
@@ -218,7 +254,11 @@ export async function runKatanaToReverbSync(options: {
         direction: SyncDirection.OUTBOUND,
         inventoryItemId: item.inventoryItemId,
         previousValue: { inventory: currentQty, state: listing.state?.slug },
-        newValue: { inventory: targetQty, action: itemResult.action },
+        newValue: {
+          inventory: targetQty,
+          action: itemResult.action,
+          ...(heldBack > 0 ? { katanaQty, heldBackForReverbSales: heldBack } : {}),
+        },
         dryRun: !writesEnabled,
         details: writesEnabled
           ? `Reverb listing ${listing.id} ${itemResult.action}`
@@ -350,6 +390,16 @@ export async function previewKatanaToReverbSync(options: {
   }
   plan.totalConsidered = syncable.length;
 
+  // Same order as the real run: Reverb sales first, then Katana.
+  let pendingByListing = new Map<string, number>();
+  try {
+    pendingByListing = await pendingReverbSalesByListing();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown error";
+    console.error("[ReverbSync] Preview order fetch failed:", msg);
+    throw new Error(`Could not read recent Reverb orders: ${msg}`);
+  }
+
   const variantIds = syncable
     .map((s) => Number(s.katanaVariantId))
     .filter((n) => Number.isFinite(n));
@@ -384,7 +434,10 @@ export async function previewKatanaToReverbSync(options: {
   for (const item of syncable) {
     const variantId = Number(item.katanaVariantId);
     const inv = inventoryByVariant.get(variantId);
-    const targetQty = inv ? netAvailable(inv) : 0;
+    const heldBack = heldBackFor(item.reverbListingId, pendingByListing);
+    const targetQty = Math.max(0, (inv ? netAvailable(inv) : 0) - heldBack);
+    const heldBackNote =
+      heldBack > 0 ? ` (holding back ${heldBack} sold on Reverb, not yet in Katana)` : "";
 
     const planItem: ReverbSyncPlanItem = {
       canonicalSku: item.canonicalSku,
@@ -426,16 +479,16 @@ export async function previewKatanaToReverbSync(options: {
           plan.noop++;
         } else {
           planItem.action = "unpublish";
-          planItem.reason = `Katana net-available is 0 - would unpublish (qty ${currentQty} -> 0)`;
+          planItem.reason = `Katana net-available is 0 - would unpublish (qty ${currentQty} -> 0)${heldBackNote}`;
           plan.willUnpublish++;
         }
       } else if (currentQty === targetQty && isLive) {
         planItem.action = "noop";
-        planItem.reason = "Quantities already match";
+        planItem.reason = `Quantities already match${heldBackNote}`;
         plan.noop++;
       } else {
         planItem.action = "update";
-        planItem.reason = `Would set Reverb qty ${currentQty} -> ${targetQty}${isLive ? "" : " and publish"}`;
+        planItem.reason = `Would set Reverb qty ${currentQty} -> ${targetQty}${isLive ? "" : " and publish"}${heldBackNote}`;
         plan.willUpdate++;
       }
     } catch (err) {
@@ -563,6 +616,13 @@ async function loadReverbListing(
     return reverb.findListingBySku(reverbSku, "all");
   }
   return null;
+}
+
+function heldBackFor(
+  reverbListingId: string | null,
+  pendingByListing: Map<string, number>
+): number {
+  return reverbListingId ? pendingByListing.get(reverbListingId) ?? 0 : 0;
 }
 
 /** Sum stock across locations per variant so multi-location items net correctly. */

@@ -46,6 +46,9 @@ export async function GET(request: NextRequest) {
           decremented: result.filter((r) =>
             r.lines.some((l) => l.action === "decremented")
           ).length,
+          skipped: result.filter((r) =>
+            r.lines.some((l) => l.action === "skipped")
+          ).length,
           dryRun,
         });
         return result;

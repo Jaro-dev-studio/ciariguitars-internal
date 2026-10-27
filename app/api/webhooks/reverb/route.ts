@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { reverb, type ReverbOrder } from "@/lib/integrations/reverb";
 import { processReverbSale } from "@/lib/integrations/sale-handler";
 import { runKatanaToReverbSync } from "@/lib/integrations/inventory-sync";
+import { resolveByReverbListingId } from "@/lib/integrations/sku-resolver";
 import { setSyncRunSummary, withSyncRun } from "@/lib/integrations/sync-run";
 import { SyncSource } from "@prisma/client";
 
@@ -25,10 +26,12 @@ export async function POST(request: NextRequest) {
       body?.order_number ?? body?.order?.order_number;
     const selfHref: string | undefined =
       body?._links?.self?.href ?? body?.order?._links?.self?.href;
+    // Listing payloads carry a self link too, so a link only marks an order
+    // when it points at one.
     const looksLikeOrder =
       orderNumber !== undefined ||
       body?.product_id !== undefined ||
-      selfHref !== undefined;
+      (selfHref?.includes("/orders/") ?? false);
 
     // The run covers ignored deliveries too, so the dashboard shows every
     // webhook Reverb sent us - not just the ones that led to a sync.
@@ -77,14 +80,32 @@ export async function POST(request: NextRequest) {
           return { handled: false };
         }
 
-        // Listing update webhook: trigger a reconcile (we push Katana -> Reverb).
+        // Listing update webhook: reconcile just that listing (we push Katana ->
+        // Reverb). Our own pushes fire this too, so a full sync here would
+        // re-read every listing once per listing we just wrote.
         const listingId: string | undefined = body?.id ?? body?.listing?.id;
         if (listingId) {
-          console.log(`[ReverbWebhook] listings/update for listing ${listingId}; reconciling`);
-          const result = await runKatanaToReverbSync({});
+          const mapping = await resolveByReverbListingId(String(listingId));
+          if (!mapping) {
+            console.log(`[ReverbWebhook] listings/update for unmapped listing ${listingId}; ignoring`);
+            setSyncRunSummary({
+              handled: false,
+              listingId,
+              reason: "No canonical SKU mapped to this Reverb listing",
+            });
+            return { handled: false };
+          }
+
+          console.log(
+            `[ReverbWebhook] listings/update for listing ${listingId}; reconciling ${mapping.canonicalSku}`
+          );
+          const result = await runKatanaToReverbSync({
+            onlyCanonicalSkus: [mapping.canonicalSku],
+          });
           setSyncRunSummary({
             handled: true,
             listingId,
+            sku: mapping.canonicalSku,
             reconciled: true,
             updated: result.updated,
             unpublished: result.unpublished,
