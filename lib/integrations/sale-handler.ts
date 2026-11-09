@@ -10,10 +10,10 @@ import {
   AlertType,
 } from "@prisma/client";
 import prisma from "@/lib/prisma";
-import { getIntegrationConfig } from "./config";
 import { katana } from "./katana";
 import { resolveDefaultLocationId } from "./katana-location";
 import { reverb, type ReverbOrder } from "./reverb";
+import { isReverbLinkLive } from "./reverb-link";
 import { mappingDriftReason } from "./mapping-guard";
 import { isVoidedReverbOrder, pendingSalesByListing, placedBefore } from "./reverb-orders";
 import { katanaCatalogSkus, resolveByReverbListingId, resolveByReverbSku } from "./sku-resolver";
@@ -36,20 +36,18 @@ export interface SaleProcessResult {
 /**
  * Records a Reverb sale against Katana by decrementing stock for each matched
  * line item. Idempotent on order number (webhook + polling may both deliver
- * the same order). With the Katana write flag off, runs as a dry run and logs
- * what would be decremented. Cancelled/refunded orders and orders placed
+ * the same order). With the Reverb link switched off, runs as a dry run and
+ * logs what would be decremented. Cancelled/refunded orders and orders placed
  * before automatic decrements went live are recorded but never decremented.
  */
 export async function processReverbSale(
   order: ReverbOrder,
   source: "webhook" | "poll" = "webhook"
 ): Promise<SaleProcessResult> {
-  const { flags } = getIntegrationConfig();
-  // Master dry-run switch overrides the per-platform write flag.
-  const writesEnabled = flags.katanaWritesEnabled && !flags.dryRun;
+  const writesEnabled = await isReverbLinkLive();
 
   console.log(
-    `[ReverbSale] Processing order ${order.order_number} from ${source} (Katana writes ${writesEnabled ? "ENABLED" : "DISABLED - dry run"}${flags.dryRun ? ", SYNC_DRY_RUN on" : ""})`
+    `[ReverbSale] Processing order ${order.order_number} from ${source} (Katana writes ${writesEnabled ? "ENABLED" : "DISABLED - dry run, Reverb link switched off"})`
   );
 
   const result: SaleProcessResult = {
@@ -205,12 +203,15 @@ export async function processReverbSale(
           details: `[dry-run] would decrement Katana variant ${variantId} by ${qty}`,
         });
       } else {
-        const adjustment = await katana.createStockAdjustment({
-          location_id: await resolveDefaultLocationId(),
-          reason: "Reverb sale",
-          additional_info: `Reverb order ${order.order_number}`,
-          stock_adjustment_rows: [{ variant_id: variantId, quantity: -Math.abs(qty) }],
-        });
+        const adjustment = await katana.createStockAdjustment(
+          {
+            location_id: await resolveDefaultLocationId(),
+            reason: "Reverb sale",
+            additional_info: `Reverb order ${order.order_number}`,
+            stock_adjustment_rows: [{ variant_id: variantId, quantity: -Math.abs(qty) }],
+          },
+          { allowWrite: true }
+        );
         katanaReference = `stock_adjustment:${adjustment.id}`;
         lineResult.action = "decremented";
         anyDecrement = true;
@@ -349,8 +350,9 @@ async function readOrdersLiveSince(): Promise<{
 /**
  * When automatic Katana decrements for Reverb sales began. Sales placed before
  * this were entered in Katana by hand while the sync ran dry, so decrementing
- * them again would count them twice. Stamped on the Reverb connection the
- * first time an order is processed with Katana writes on; null until then.
+ * them again would count them twice. Restamped each time the Reverb link is
+ * switched on (see reverb-link.ts), and as a fallback the first time an order
+ * is processed with writes on; null until then.
  */
 export async function resolveReverbOrdersLiveSince(
   writesEnabled: boolean
@@ -379,8 +381,7 @@ export async function resolveReverbOrdersLiveSince(
 export async function pendingReverbSalesByListing(
   sinceHours = 24
 ): Promise<Map<string, number>> {
-  const { flags } = getIntegrationConfig();
-  const writesEnabled = flags.katanaWritesEnabled && !flags.dryRun;
+  const writesEnabled = await isReverbLinkLive();
 
   const [orders, { liveSince: stored }] = await Promise.all([
     listReverbOrdersUpdatedSince(sinceHours),

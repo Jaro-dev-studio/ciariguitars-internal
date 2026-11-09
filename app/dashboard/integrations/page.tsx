@@ -1,18 +1,18 @@
 import { fetchIntegrations, fetchSyncConfigurations } from "@/lib/fetchers";
-import { getIntegrationConfig } from "@/lib/integrations/config";
+import { getReverbLinkState } from "@/lib/integrations/reverb-link";
 import { IntegrationsClient } from "./client";
 import { LiveConnections } from "@/components/integrations/live-connections";
 
 export default async function IntegrationsPage() {
-  const [integrationsResult, configsResult] = await Promise.all([
+  const [integrationsResult, configsResult, link] = await Promise.all([
     fetchIntegrations(),
     fetchSyncConfigurations(),
+    getReverbLinkState(),
   ]);
-  const { flags } = getIntegrationConfig();
 
   return (
     <div className="space-y-6">
-      <LiveConnections dryRun={flags.dryRun} />
+      <LiveConnections dryRun={!link.live} />
       <IntegrationsClient
         integrations={integrationsResult.data}
         syncConfigs={configsResult.data}

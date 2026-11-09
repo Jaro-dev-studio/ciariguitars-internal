@@ -22,6 +22,18 @@ import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Table,
   TableBody,
@@ -46,14 +58,15 @@ import {
   runReverbSyncNow,
   previewReverbSync,
   refreshInventorySnapshotNow,
+  setReverbLinkLiveNow,
 } from "@/lib/integration-actions";
 import type { ReverbSyncPlan } from "@/lib/integrations/inventory-sync";
+import type { ReverbLinkState } from "@/lib/integrations/reverb-link";
 
 interface InventorySyncClientProps {
   inventoryItems: any[] | null;
   error: string | null;
-  dryRun: boolean;
-  reverbWritesEnabled: boolean;
+  link: ReverbLinkState;
 }
 
 interface SyncRow {
@@ -247,12 +260,104 @@ function PreviewPanel({ plan, onClose }: { plan: ReverbSyncPlan; onClose: () => 
   );
 }
 
-export function InventorySyncClient({
-  inventoryItems,
-  error,
-  dryRun,
-  reverbWritesEnabled,
-}: InventorySyncClientProps) {
+function ReverbLinkBanner({ link }: { link: ReverbLinkState }) {
+  const router = useRouter();
+  const [isSwitching, startSwitch] = useTransition();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const turningOn = !link.live;
+
+  const handleConfirm = () => {
+    startSwitch(async () => {
+      const { error } = await setReverbLinkLiveNow(turningOn);
+      if (error) {
+        toast.error("Could not switch the Reverb link", { description: error });
+        return;
+      }
+      toast.success(turningOn ? "Reverb link switched on" : "Reverb link switched off", {
+        description: turningOn
+          ? "The next scheduled sync runs within 15 minutes."
+          : "Nothing will be written to Reverb or Katana.",
+      });
+      setConfirmOpen(false);
+      router.refresh();
+    });
+  };
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 rounded-lg border p-3 text-sm sm:flex-row sm:items-start sm:justify-between",
+        link.live ? "border-accent/40 bg-accent/10" : "border-warning/40 bg-warning/10"
+      )}
+    >
+      <div className="flex items-start gap-3">
+        {link.live ? (
+          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-accent" />
+        ) : (
+          <FlaskConical className="text-warning mt-0.5 size-4 shrink-0" />
+        )}
+        <div className="text-foreground">
+          <p className="font-medium">
+            {link.live
+              ? "Live - Reverb follows Katana, and Reverb sales come out of Katana automatically."
+              : "Dry run - the Reverb link is off, so nothing is written to Reverb or Katana."}
+          </p>
+          <p className="text-muted-foreground">
+            {link.live
+              ? "Reverb sales no longer need entering in Katana by hand."
+              : "Use Preview changes to see what would happen. Reverb sales still need entering in Katana by hand."}
+            {link.changedAt && (
+              <>
+                {" "}
+                Switched {link.live ? "on" : "off"}
+                {link.changedBy ? ` by ${link.changedBy}` : ""} on{" "}
+                {new Date(link.changedAt).toLocaleString()}.
+              </>
+            )}
+          </p>
+        </div>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <Label htmlFor="reverb-link-switch">Reverb link</Label>
+        <Switch
+          id="reverb-link-switch"
+          checked={link.live}
+          disabled={isSwitching}
+          onCheckedChange={() => setConfirmOpen(true)}
+        />
+      </div>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {turningOn ? "Switch the Reverb link on?" : "Switch the Reverb link off?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {turningOn
+                ? "Every 15 minutes Reverb quantities will be set from Katana (listings at 0 are unpublished), and Reverb sales placed from now on will be taken out of Katana automatically, so stop entering them by hand. Run Preview changes first to check what the first sync will do."
+                : "Nothing will be written to Reverb or Katana until it is switched back on. In the meantime, enter Reverb sales in Katana by hand."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isSwitching}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={isSwitching}
+              onClick={(e) => {
+                e.preventDefault();
+                handleConfirm();
+              }}
+            >
+              {isSwitching ? "Switching..." : turningOn ? "Switch on" : "Switch off"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+export function InventorySyncClient({ inventoryItems, error, link }: InventorySyncClientProps) {
   const router = useRouter();
   const [searchTerm, setSearchTerm] = useState("");
   const [syncFilter, setSyncFilter] = useState<string>("all");
@@ -383,16 +488,10 @@ export function InventorySyncClient({
           <Button
             size="sm"
             onClick={handleApply}
-            disabled={isSyncing || rows.length === 0 || dryRun || !reverbWritesEnabled}
-            title={
-              dryRun
-                ? "Dry run is enabled (SYNC_DRY_RUN). Disable it to apply changes."
-                : !reverbWritesEnabled
-                  ? "Reverb writes are disabled (SYNC_REVERB_WRITES_ENABLED)."
-                  : undefined
-            }
+            disabled={isSyncing || rows.length === 0 || !link.live}
+            title={!link.live ? "The Reverb link is off. Switch it on to apply changes." : undefined}
           >
-            {dryRun ? (
+            {!link.live ? (
               <Ban className="mr-2 size-4" />
             ) : (
               <RefreshCw className={cn("mr-2 size-4", isSyncing && "animate-spin")} />
@@ -402,30 +501,7 @@ export function InventorySyncClient({
         </div>
       </div>
 
-      {dryRun ? (
-        <div className="border-warning/40 bg-warning/10 flex items-start gap-3 rounded-lg border p-3 text-sm">
-          <FlaskConical className="text-warning mt-0.5 size-4 shrink-0" />
-          <div className="text-foreground">
-            <p className="font-medium">Dry run is on - nothing will be written to Reverb.</p>
-            <p className="text-muted-foreground">
-              Use <strong>Preview changes</strong> to see exactly what would be updated or
-              unpublished. To go live, set <code className="font-mono">SYNC_DRY_RUN=false</code>{" "}
-              (and <code className="font-mono">SYNC_REVERB_WRITES_ENABLED=true</code>), then use{" "}
-              <strong>Apply sync</strong>.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="flex items-start gap-3 rounded-lg border border-accent/40 bg-accent/10 p-3 text-sm">
-          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-accent" />
-          <p className="text-foreground">
-            Live mode -{" "}
-            {reverbWritesEnabled
-              ? "Apply sync will write changes to Reverb."
-              : "Reverb writes are still disabled (SYNC_REVERB_WRITES_ENABLED=false)."}
-          </p>
-        </div>
-      )}
+      <ReverbLinkBanner link={link} />
 
       <PageIntro icon={Info}>
         This page keeps Reverb stock in line with Katana. For every mapped item it pushes the
@@ -434,7 +510,8 @@ export function InventorySyncClient({
         prices and listing content are never touched. <strong>Refresh quantities</strong> pulls the
         current Katana and Reverb numbers into the table without changing anything;{" "}
         <strong>Preview changes</strong> reads live data and shows what would happen without writing
-        anything; <strong>Apply sync</strong> performs the writes (disabled while dry run is on).
+        anything; <strong>Apply sync</strong> performs the writes now instead of waiting for the
+        next scheduled run (only while the Reverb link is on).
       </PageIntro>
 
       {plan && <PreviewPanel plan={plan} onClose={() => setPlan(null)} />}

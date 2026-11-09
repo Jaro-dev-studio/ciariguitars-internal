@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SyncSource } from "@prisma/client";
 import { pollReverbOrders } from "@/lib/integrations/sale-handler";
-import { getIntegrationConfig } from "@/lib/integrations/config";
+import { isReverbLinkLive } from "@/lib/integrations/reverb-link";
 import { setSyncRunSummary, withSyncRun } from "@/lib/integrations/sync-run";
 
 export const maxDuration = 300;
@@ -17,8 +17,9 @@ function isAuthorized(request: NextRequest): boolean {
 
 /**
  * Order Sync cron (every 10 min): polls Reverb for recent sales and decrements
- * Katana stock for each matched order. While SYNC_DRY_RUN is on this runs as a
- * dry run - it still writes sync logs (flagged dryRun) but never touches Katana.
+ * Katana stock for each matched order. While the Reverb link is switched off this
+ * runs as a dry run - it still writes sync logs (flagged dryRun) but never
+ * touches Katana.
  */
 export async function GET(request: NextRequest) {
   if (!isAuthorized(request)) {
@@ -26,8 +27,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { flags } = getIntegrationConfig();
-    const dryRun = flags.dryRun || !flags.katanaWritesEnabled;
+    const dryRun = !(await isReverbLinkLive());
     console.log(
       `[CronOrderSync] ========== Polling Reverb orders (${dryRun ? "DRY RUN - no Katana writes" : "LIVE"}) ==========`
     );

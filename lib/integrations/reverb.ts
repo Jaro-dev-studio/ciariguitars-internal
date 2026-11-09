@@ -2,6 +2,7 @@ import "server-only";
 
 import { getIntegrationConfig, IntegrationError } from "./config";
 import { fetchWithRetry } from "./http";
+import { isReverbLinkLive } from "./reverb-link";
 
 export interface ReverbHalLink {
   href: string;
@@ -90,10 +91,6 @@ class ReverbClient {
     return getIntegrationConfig().reverb;
   }
 
-  private get writesEnabled() {
-    return getIntegrationConfig().flags.reverbWritesEnabled;
-  }
-
   private async request<T>(
     pathOrUrl: string,
     init: RequestInit = {},
@@ -109,9 +106,11 @@ class ReverbClient {
     const method = (init.method ?? "GET").toUpperCase();
     const isWrite = method !== "GET" && method !== "HEAD";
 
-    if (isWrite && !this.writesEnabled && !allowWrite) {
+    // Listing writes only happen through the Katana <-> Reverb link, so they
+    // follow its switch.
+    if (isWrite && !allowWrite && !(await isReverbLinkLive())) {
       throw new IntegrationError(
-        `Reverb write blocked by feature flag (${method} ${pathOrUrl})`,
+        `Reverb write blocked: the Reverb link is switched off (${method} ${pathOrUrl})`,
         "REVERB"
       );
     }

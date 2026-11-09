@@ -14,6 +14,11 @@ import {
   refreshInventorySnapshot,
   type ReverbSyncPlan,
 } from "@/lib/integrations/inventory-sync";
+import {
+  getReverbLinkState,
+  setReverbLinkLive,
+  type ReverbLinkState,
+} from "@/lib/integrations/reverb-link";
 import { pollReverbOrders } from "@/lib/integrations/sale-handler";
 import { touchIntegrationLastSync } from "@/lib/integrations/sync-logger";
 import { setSyncRunSummary, withSyncRun } from "@/lib/integrations/sync-run";
@@ -48,6 +53,10 @@ export async function testConnections(): Promise<{
 
     console.log("[IntegrationActions] Testing platform connections...");
     const config = getIntegrationConfig();
+    const { live: reverbLinkLive } = await getReverbLinkState();
+    // Katana is written to by Reverb sales (Reverb link) and by Shop Flow (env flags).
+    const katanaWrites =
+      reverbLinkLive || (config.flags.katanaWritesEnabled && !config.flags.dryRun);
 
     const connections = await prisma.integrationConnection.findMany();
     const lastSyncByPlatform = new Map(
@@ -67,7 +76,7 @@ export async function testConnections(): Promise<{
         detail: ping.ok
           ? `Connected (sample products: ${ping.productCount ?? 0})`
           : ping.error ?? "Connection failed",
-        writesEnabled: config.flags.katanaWritesEnabled,
+        writesEnabled: katanaWrites,
         lastSyncAt: lastSyncByPlatform.get(IntegrationPlatform.KATANA)?.toISOString() ?? null,
       });
       if (ping.ok) await touchIntegrationLastSync(IntegrationPlatform.KATANA, true);
@@ -77,7 +86,7 @@ export async function testConnections(): Promise<{
         configured: false,
         ok: false,
         detail: "KATANA_API_KEY not set",
-        writesEnabled: config.flags.katanaWritesEnabled,
+        writesEnabled: katanaWrites,
         lastSyncAt: null,
       });
     }
@@ -93,7 +102,7 @@ export async function testConnections(): Promise<{
         detail: ping.ok
           ? `Connected${ping.shopName ? ` (${ping.shopName})` : ""}`
           : ping.error ?? "Connection failed",
-        writesEnabled: config.flags.reverbWritesEnabled,
+        writesEnabled: reverbLinkLive,
         lastSyncAt: lastSyncByPlatform.get(IntegrationPlatform.REVERB)?.toISOString() ?? null,
       });
       if (ping.ok) await touchIntegrationLastSync(IntegrationPlatform.REVERB, true);
@@ -103,7 +112,7 @@ export async function testConnections(): Promise<{
         configured: false,
         ok: false,
         detail: "REVERB_PERSONAL_ACCESS_TOKEN not set",
-        writesEnabled: config.flags.reverbWritesEnabled,
+        writesEnabled: reverbLinkLive,
         lastSyncAt: null,
       });
     }
@@ -224,6 +233,36 @@ export async function refreshInventorySnapshotNow(): Promise<{
   }
 }
 
+/**
+ * Switches the Reverb <-> Katana stock link on or off. The crons pick it up on
+ * their next run, so no redeploy is needed.
+ */
+export async function setReverbLinkLiveNow(live: boolean): Promise<{
+  data: ReverbLinkState | null;
+  error: string | null;
+}> {
+  try {
+    const userId = await requireAuth();
+    if (!userId) return { data: null, error: "Not authenticated" };
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+    const state = await setReverbLinkLive(live, user?.email ?? userId);
+
+    revalidatePath("/dashboard/inventory-sync");
+    revalidatePath("/dashboard/integrations");
+    return { data: state, error: null };
+  } catch (error) {
+    console.error("[IntegrationActions] setReverbLinkLiveNow failed:", error);
+    return {
+      data: null,
+      error: error instanceof Error ? error.message : "Could not switch the Reverb link",
+    };
+  }
+}
+
 export async function runReverbSyncNow(): Promise<{
   data: Awaited<ReturnType<typeof runKatanaToReverbSync>> | null;
   error: string | null;
@@ -232,12 +271,12 @@ export async function runReverbSyncNow(): Promise<{
     const userId = await requireAuth();
     if (!userId) return { data: null, error: "Not authenticated" };
 
-    const { flags } = getIntegrationConfig();
-    if (flags.dryRun) {
-      console.log("[IntegrationActions] Apply blocked - SYNC_DRY_RUN is on");
+    const { live } = await getReverbLinkState();
+    if (!live) {
+      console.log("[IntegrationActions] Apply blocked - Reverb link is switched off");
       return {
         data: null,
-        error: "Dry run is enabled (SYNC_DRY_RUN). Use Preview, or disable dry run to apply changes.",
+        error: "The Reverb link is switched off. Use Preview, or switch it on to apply changes.",
       };
     }
 

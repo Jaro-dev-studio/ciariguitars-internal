@@ -9,10 +9,11 @@ import {
   AlertType,
 } from "@prisma/client";
 import prisma from "@/lib/prisma";
-import { getIntegrationConfig, IntegrationError } from "./config";
+import { IntegrationError } from "./config";
 import { katana, netAvailable, type KatanaInventory } from "./katana";
 import { mappingDriftReason } from "./mapping-guard";
 import { reverb, type ReverbListing } from "./reverb";
+import { isReverbLinkLive } from "./reverb-link";
 import { pendingReverbSalesByListing } from "./sale-handler";
 import { katanaCatalogSkus, listSyncableItems } from "./sku-resolver";
 import { recordSyncLog, recordAlert, clearAlerts, touchIntegrationLastSync } from "./sync-logger";
@@ -45,8 +46,9 @@ export interface ReverbSyncRunResult {
  * Pushes Katana "available to sell" (in_stock - committed) quantities onto the
  * matching Reverb listings, minus any Reverb sales not booked in Katana yet.
  * When availability hits 0 the Reverb listing is unpublished (per client
- * decision). All writes respect the Reverb feature flag - with writes off, we
- * run a full dry-run and log exactly what WOULD happen without touching Reverb.
+ * decision). Writes only happen while the Reverb link is switched on - with it
+ * off, we run a full dry-run and log exactly what WOULD happen without touching
+ * Reverb.
  */
 export async function runKatanaToReverbSync(options: {
   locationIds?: number[];
@@ -54,12 +56,10 @@ export async function runKatanaToReverbSync(options: {
   onlyCanonicalSkus?: string[];
 } = {}): Promise<ReverbSyncRunResult> {
   const startedAt = new Date();
-  const { flags } = getIntegrationConfig();
-  // Master dry-run switch overrides the per-platform write flag.
-  const writesEnabled = flags.reverbWritesEnabled && !flags.dryRun;
+  const writesEnabled = await isReverbLinkLive();
 
   console.log(
-    `[ReverbSync] Starting Katana -> Reverb sync (writes ${writesEnabled ? "ENABLED" : "DISABLED - dry run"}${flags.dryRun ? ", SYNC_DRY_RUN on" : ""})`
+    `[ReverbSync] Starting Katana -> Reverb sync (writes ${writesEnabled ? "ENABLED" : "DISABLED - dry run, Reverb link switched off"})`
   );
 
   const result: ReverbSyncRunResult = {
@@ -385,9 +385,7 @@ export interface ReverbSyncPlanItem {
 
 export interface ReverbSyncPlan {
   generatedAt: string;
-  /** SYNC_DRY_RUN master flag state. */
-  dryRunFlag: boolean;
-  /** Effective: would a real "Apply" actually write to Reverb right now? */
+  /** Would a real "Apply" write to Reverb right now (Reverb link switched on)? */
   writesEnabled: boolean;
   totalConsidered: number;
   willUpdate: number;
@@ -407,14 +405,12 @@ export async function previewKatanaToReverbSync(options: {
   locationIds?: number[];
   onlyCanonicalSkus?: string[];
 } = {}): Promise<ReverbSyncPlan> {
-  const { flags } = getIntegrationConfig();
-  const writesEnabled = flags.reverbWritesEnabled && !flags.dryRun;
+  const writesEnabled = await isReverbLinkLive();
 
   console.log("[ReverbSync] Building dry-run preview (read-only)...");
 
   const plan: ReverbSyncPlan = {
     generatedAt: new Date().toISOString(),
-    dryRunFlag: flags.dryRun,
     writesEnabled,
     totalConsidered: 0,
     willUpdate: 0,

@@ -226,20 +226,31 @@ class KatanaClient {
     return result.data?.[0] ?? null;
   }
 
-  async createStockAdjustment(payload: {
-    location_id: number;
-    reason?: string;
-    additional_info?: string;
-    stock_adjustment_rows: Array<{
-      variant_id: number;
-      quantity: number;
-      cost_per_unit?: number;
-    }>;
-  }): Promise<{ id: number }> {
-    return this.request("/stock_adjustments", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+  /**
+   * `allowWrite` is for callers gated by their own switch (Reverb sales follow
+   * the Reverb link) rather than SYNC_KATANA_WRITES_ENABLED.
+   */
+  async createStockAdjustment(
+    payload: {
+      location_id: number;
+      reason?: string;
+      additional_info?: string;
+      stock_adjustment_rows: Array<{
+        variant_id: number;
+        quantity: number;
+        cost_per_unit?: number;
+      }>;
+    },
+    { allowWrite = false }: { allowWrite?: boolean } = {}
+  ): Promise<{ id: number }> {
+    return this.request(
+      "/stock_adjustments",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+      { allowWrite }
+    );
   }
 
   async createSalesOrder(payload: {
