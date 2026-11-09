@@ -11,9 +11,10 @@ import {
 import prisma from "@/lib/prisma";
 import { getIntegrationConfig, IntegrationError } from "./config";
 import { katana, netAvailable, type KatanaInventory } from "./katana";
+import { mappingDriftReason } from "./mapping-guard";
 import { reverb, type ReverbListing } from "./reverb";
 import { pendingReverbSalesByListing } from "./sale-handler";
-import { listSyncableItems } from "./sku-resolver";
+import { katanaCatalogSkus, listSyncableItems } from "./sku-resolver";
 import { recordSyncLog, recordAlert, clearAlerts, touchIntegrationLastSync } from "./sync-logger";
 
 export interface ReverbSyncItemResult {
@@ -157,6 +158,10 @@ export async function runKatanaToReverbSync(options: {
     return result;
   }
 
+  const katanaSkuByVariant = await katanaCatalogSkus(
+    syncable.map((s) => s.katanaVariantId).filter((id): id is string => Boolean(id))
+  );
+
   for (const item of syncable) {
     const variantId = Number(item.katanaVariantId);
     const inv = inventoryByVariant.get(variantId);
@@ -194,9 +199,43 @@ export async function runKatanaToReverbSync(options: {
       }
 
       itemResult.previousQty = listing.inventory ?? null;
+      const currentQty = listing.inventory ?? 0;
+
+      const drift = mappingDriftReason({
+        canonicalSku: item.canonicalSku,
+        katanaSku: item.katanaVariantId ? katanaSkuByVariant.get(item.katanaVariantId) : null,
+        reverbSku: listing.sku,
+      });
+      if (drift) {
+        itemResult.action = "skipped";
+        itemResult.error = drift;
+        result.skipped++;
+        console.warn(`[ReverbSync] SKIPPED ${item.canonicalSku} (reverb ${listing.id}): ${drift}`);
+        await recordSyncLog({
+          syncType: SyncType.LISTING_UPDATE,
+          platform: IntegrationPlatform.REVERB,
+          status: SyncStatus.SKIPPED,
+          direction: SyncDirection.OUTBOUND,
+          inventoryItemId: item.inventoryItemId,
+          previousValue: { inventory: currentQty, state: listing.state?.slug, sku: listing.sku },
+          errorMessage: drift,
+          dryRun: !writesEnabled,
+          details: `Reverb listing ${listing.id} left alone: ${drift}`,
+        });
+        await recordAlert({
+          type: AlertType.QUANTITY_MISMATCH,
+          severity: AlertSeverity.WARNING,
+          title: `Reverb listing for ${item.canonicalSku} is not being synced`,
+          message: `${drift}. Re-link Reverb listing ${listing.id} on the SKU Mapping page; until then its quantity is not kept in line with Katana.`,
+          relatedSku: item.canonicalSku,
+          relatedPlatform: IntegrationPlatform.REVERB,
+        });
+        result.items.push(itemResult);
+        continue;
+      }
+
       const shouldUnpublish = targetQty <= 0;
       const isLive = listing.state?.slug === "live";
-      const currentQty = listing.inventory ?? 0;
 
       // Decide the action.
       if (shouldUnpublish) {
@@ -265,12 +304,14 @@ export async function runKatanaToReverbSync(options: {
           : `[dry-run] Reverb listing ${listing.id} ${itemResult.action}`,
       });
 
-      // Keep local cache fresh for the dashboard.
+      // Keep local cache fresh for the dashboard. Same numbers as the manual
+      // refresh: Katana net available, and what Reverb shows after this run
+      // (unchanged in a dry run).
       await prisma.inventoryItem.update({
         where: { id: item.inventoryItemId },
         data: {
-          katanaQty: inv ? Math.floor(parseFloat(inv.quantity_in_stock || "0")) : 0,
-          reverbQty: targetQty,
+          katanaQty,
+          reverbQty: writesEnabled ? targetQty : currentQty,
           isReadyToShip: targetQty > 0,
           lastReverbSyncAt: writesEnabled ? new Date() : undefined,
           lastKatanaSyncAt: new Date(),
@@ -418,17 +459,22 @@ export async function previewKatanaToReverbSync(options: {
     throw new Error(`Could not fetch Katana inventory: ${msg}`);
   }
 
-  // Resolve Katana productId per variant (for deep links) from the staging catalog.
+  // Resolve Katana productId (for deep links) and current SKU per variant from
+  // the staging catalog.
   const katanaVariantIds = syncable
     .map((s) => s.katanaVariantId)
     .filter((id): id is string => Boolean(id));
   const productIdByVariantId = new Map<string, string | null>();
+  const katanaSkuByVariant = new Map<string, string | null>();
   if (katanaVariantIds.length) {
     const staged = await prisma.katanaCatalogVariant.findMany({
       where: { variantId: { in: katanaVariantIds } },
-      select: { variantId: true, productId: true },
+      select: { variantId: true, productId: true, sku: true },
     });
-    for (const s of staged) productIdByVariantId.set(s.variantId, s.productId);
+    for (const s of staged) {
+      productIdByVariantId.set(s.variantId, s.productId);
+      katanaSkuByVariant.set(s.variantId, s.sku);
+    }
   }
 
   for (const item of syncable) {
@@ -471,8 +517,17 @@ export async function previewKatanaToReverbSync(options: {
       const currentQty = listing.inventory ?? 0;
       const isLive = listing.state?.slug === "live";
       const shouldUnpublish = targetQty <= 0;
+      const drift = mappingDriftReason({
+        canonicalSku: item.canonicalSku,
+        katanaSku: item.katanaVariantId ? katanaSkuByVariant.get(item.katanaVariantId) : null,
+        reverbSku: listing.sku,
+      });
 
-      if (shouldUnpublish) {
+      if (drift) {
+        planItem.action = "skip";
+        planItem.reason = `${drift} - left alone until it is re-linked`;
+        plan.skipped++;
+      } else if (shouldUnpublish) {
         if (!isLive && currentQty === 0) {
           planItem.action = "noop";
           planItem.reason = "Already at 0 and not live";

@@ -140,7 +140,9 @@ const PLAN_ACTION_META: Record<
 };
 
 function PreviewPanel({ plan, onClose }: { plan: ReverbSyncPlan; onClose: () => void }) {
-  const changes = plan.willUpdate + plan.willUnpublish;
+  // Skipped rows are listed too: each one is a listing the sync will not keep
+  // in line with Katana until someone fixes it.
+  const rows = plan.items.filter((i) => i.action !== "noop");
   return (
     <Card className="border-primary/30">
       <CardHeader className="pb-3">
@@ -174,7 +176,7 @@ function PreviewPanel({ plan, onClose }: { plan: ReverbSyncPlan; onClose: () => 
         </div>
       </CardHeader>
       <CardContent>
-        {changes === 0 ? (
+        {rows.length === 0 ? (
           <p className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
             Everything is already in sync - no updates or unpublishes would be made.
           </p>
@@ -192,48 +194,50 @@ function PreviewPanel({ plan, onClose }: { plan: ReverbSyncPlan; onClose: () => 
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {plan.items
-                  .filter((i) => i.action === "update" || i.action === "unpublish")
-                  .map((item) => {
-                    const meta = PLAN_ACTION_META[item.action];
-                    return (
-                      <TableRow key={`${item.canonicalSku}-${item.reverbListingId}`}>
-                        <TableCell className="max-w-[280px]">
-                          <ExternalTitleLink
-                            href={reverbItemUrl(item.reverbListingId)}
-                            className="font-medium"
-                          >
-                            {item.reverbTitle ?? item.reverbListingId ?? "-"}
-                          </ExternalTitleLink>
-                          {item.currentState && (
-                            <p className="text-xs text-muted-foreground">
-                              state: {item.currentState}
-                            </p>
-                          )}
-                        </TableCell>
-                        <TableCell className="font-mono text-sm">
-                          <ExternalTitleLink href={katanaProductUrl(item.katanaProductId)}>
-                            {item.canonicalSku}
-                          </ExternalTitleLink>
-                        </TableCell>
-                        <TableCell className="text-center font-mono">
-                          {item.currentReverbQty ?? "-"}
-                        </TableCell>
-                        <TableCell className="text-center text-muted-foreground">
-                          <ArrowRight className="mx-auto size-4" />
-                        </TableCell>
-                        <TableCell className="text-center font-mono font-medium">
-                          {item.action === "unpublish" ? "0 (unpublish)" : item.targetQty}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={cn("text-xs", meta.className)}>
-                            {meta.label}
-                          </Badge>
-                          <p className="mt-1 text-xs text-muted-foreground">{item.reason}</p>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
+                {rows.map((item) => {
+                  const meta = PLAN_ACTION_META[item.action];
+                  return (
+                    <TableRow key={`${item.canonicalSku}-${item.reverbListingId}`}>
+                      <TableCell className="max-w-[280px]">
+                        <ExternalTitleLink
+                          href={reverbItemUrl(item.reverbListingId)}
+                          className="font-medium"
+                        >
+                          {item.reverbTitle ?? item.reverbListingId ?? "-"}
+                        </ExternalTitleLink>
+                        {item.currentState && (
+                          <p className="text-xs text-muted-foreground">
+                            state: {item.currentState}
+                          </p>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">
+                        <ExternalTitleLink href={katanaProductUrl(item.katanaProductId)}>
+                          {item.canonicalSku}
+                        </ExternalTitleLink>
+                      </TableCell>
+                      <TableCell className="text-center font-mono">
+                        {item.currentReverbQty ?? "-"}
+                      </TableCell>
+                      <TableCell className="text-center text-muted-foreground">
+                        <ArrowRight className="mx-auto size-4" />
+                      </TableCell>
+                      <TableCell className="text-center font-mono font-medium">
+                        {item.action === "unpublish"
+                          ? "0 (unpublish)"
+                          : item.action === "skip"
+                            ? "-"
+                            : item.targetQty}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className={cn("text-xs", meta.className)}>
+                          {meta.label}
+                        </Badge>
+                        <p className="mt-1 text-xs text-muted-foreground">{item.reason}</p>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

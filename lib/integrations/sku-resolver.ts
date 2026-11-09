@@ -138,6 +138,21 @@ export async function listSyncableItems(): Promise<ResolvedMapping[]> {
     );
 }
 
+/**
+ * Each Katana variant's SKU as of the latest catalog import, keyed by variant
+ * id. Variants missing from the import are left out.
+ */
+export async function katanaCatalogSkus(
+  variantIds: string[]
+): Promise<Map<string, string | null>> {
+  if (variantIds.length === 0) return new Map();
+  const rows = await prisma.katanaCatalogVariant.findMany({
+    where: { variantId: { in: variantIds } },
+    select: { variantId: true, sku: true },
+  });
+  return new Map(rows.map((r) => [r.variantId, r.sku]));
+}
+
 export async function listCoverageGaps(): Promise<{
   missingReverb: ResolvedMapping[];
   missingKatana: ResolvedMapping[];

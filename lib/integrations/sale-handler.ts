@@ -14,8 +14,9 @@ import { getIntegrationConfig } from "./config";
 import { katana } from "./katana";
 import { resolveDefaultLocationId } from "./katana-location";
 import { reverb, type ReverbOrder } from "./reverb";
+import { mappingDriftReason } from "./mapping-guard";
 import { isVoidedReverbOrder, pendingSalesByListing, placedBefore } from "./reverb-orders";
-import { resolveByReverbListingId, resolveByReverbSku } from "./sku-resolver";
+import { katanaCatalogSkus, resolveByReverbListingId, resolveByReverbSku } from "./sku-resolver";
 import { recordSyncLog, recordAlert, touchIntegrationLastSync } from "./sync-logger";
 
 export interface SaleProcessResult {
@@ -118,6 +119,15 @@ export async function processReverbSale(
           ? await resolveByReverbSku(order.sku)
           : null;
 
+    // A sale on a listing whose SKU no longer matches its mapping would come
+    // off the wrong Katana item.
+    const katanaSku = mapping?.katanaVariantId
+      ? (await katanaCatalogSkus([mapping.katanaVariantId])).get(mapping.katanaVariantId)
+      : null;
+    const drift = mapping
+      ? mappingDriftReason({ canonicalSku: mapping.canonicalSku, katanaSku, reverbSku: order.sku })
+      : null;
+
     if (skipReason) {
       lineResult.action = "skipped";
       console.log(`[ReverbSale] Skipping order ${order.order_number}: ${skipReason}`);
@@ -149,6 +159,29 @@ export async function processReverbSale(
         title: `Unmatched Reverb sale on order ${order.order_number}`,
         message: `Sold item (listing=${listingId ?? "n/a"}, sku=${order.sku ?? "n/a"}) has no Katana mapping, so stock was not decremented.`,
         relatedSku: order.sku ?? undefined,
+        relatedPlatform: IntegrationPlatform.REVERB,
+      });
+    } else if (drift) {
+      lineResult.action = "unmatched";
+      lineResult.canonicalSku = mapping.canonicalSku;
+      lineResult.error = drift;
+      console.warn(`[ReverbSale] Order ${order.order_number} not decremented: ${drift}`);
+      await recordSyncLog({
+        syncType: SyncType.ORDER_SYNC,
+        platform: IntegrationPlatform.REVERB,
+        status: SyncStatus.SKIPPED,
+        direction: SyncDirection.INBOUND,
+        inventoryItemId: mapping.inventoryItemId,
+        newValue: { orderNumber: order.order_number, listingId, sku: order.sku, qty },
+        errorMessage: drift,
+        details: `Reverb order ${order.order_number} not decremented: ${drift}`,
+      });
+      await recordAlert({
+        type: AlertType.QUANTITY_MISMATCH,
+        severity: AlertSeverity.WARNING,
+        title: `Reverb sale on order ${order.order_number} not taken out of Katana`,
+        message: `${drift}, so Katana stock was not decremented. Fix the mapping on the SKU Mapping page and make sure this sale comes out of Katana.`,
+        relatedSku: mapping.canonicalSku,
         relatedPlatform: IntegrationPlatform.REVERB,
       });
     } else {
