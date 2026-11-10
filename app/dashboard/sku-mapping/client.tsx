@@ -87,7 +87,7 @@ function reverbItemUrl(listingId: string): string {
 }
 
 function katanaProductUrl(productId: string | null): string | null {
-  return productId ? `${KATANA_APP_BASE}/items/products/${productId}` : null;
+  return productId ? `${KATANA_APP_BASE}/product/${productId}` : null;
 }
 
 function TitleLink({

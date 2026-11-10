@@ -104,7 +104,7 @@ function reverbItemUrl(listingId: string | null): string | null {
 }
 
 function katanaProductUrl(productId: string | null): string | null {
-  return productId ? `${KATANA_APP_BASE}/items/products/${productId}` : null;
+  return productId ? `${KATANA_APP_BASE}/product/${productId}` : null;
 }
 
 function ExternalTitleLink({
@@ -197,6 +197,15 @@ function PreviewPanel({ plan, onClose }: { plan: ReverbSyncPlan; onClose: () => 
               <TableBody>
                 {rows.map((item) => {
                   const meta = PLAN_ACTION_META[item.action];
+                  // A draft or ended listing is published by an update, and only
+                  // has its quantity zeroed by an "unpublish".
+                  const isLive = item.currentState === "live";
+                  const label =
+                    item.action === "update" && !isLive
+                      ? "Would publish"
+                      : item.action === "unpublish" && !isLive
+                        ? "Would set to 0"
+                        : meta.label;
                   return (
                     <TableRow key={`${item.canonicalSku}-${item.reverbListingId}`}>
                       <TableCell className="max-w-[280px]">
@@ -225,14 +234,16 @@ function PreviewPanel({ plan, onClose }: { plan: ReverbSyncPlan; onClose: () => 
                       </TableCell>
                       <TableCell className="text-center font-mono font-medium">
                         {item.action === "unpublish"
-                          ? "0 (unpublish)"
+                          ? isLive
+                            ? "0 (unpublish)"
+                            : "0"
                           : item.action === "skip"
                             ? "-"
                             : item.targetQty}
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className={cn("text-xs", meta.className)}>
-                          {meta.label}
+                          {label}
                         </Badge>
                         <p className="mt-1 text-xs text-muted-foreground">{item.reason}</p>
                       </TableCell>

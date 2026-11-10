@@ -75,6 +75,9 @@ interface KatanaListResponse<T> {
   data: T[];
 }
 
+/** Upper bound on inventory pages read in one go (10,000 rows at 250 a page). */
+const MAX_INVENTORY_PAGES = 40;
+
 class KatanaClient {
   private get config() {
     return getIntegrationConfig().katana;
@@ -173,25 +176,48 @@ class KatanaClient {
     return result.data ?? [];
   }
 
+  /**
+   * Inventory rows (one per variant per location). Reads every page unless a
+   * specific page is asked for: a missing row counts as no stock, so stopping
+   * at the first page would quietly take items off sale once there are more
+   * rows than fit on one.
+   */
   async getInventoryForVariants(opts: {
     variantIds?: number[];
     locationIds?: number[];
     limit?: number;
     page?: number;
   } = {}): Promise<KatanaInventory[]> {
-    const params = new URLSearchParams();
-    params.set("limit", String(opts.limit ?? 250));
-    if (opts.page !== undefined) params.set("page", String(opts.page));
-    if (opts.variantIds?.length) {
-      for (const id of opts.variantIds) params.append("variant_id", String(id));
+    const limit = opts.limit ?? 250;
+    const readPage = async (page: number | undefined) => {
+      const params = new URLSearchParams();
+      params.set("limit", String(limit));
+      if (page !== undefined) params.set("page", String(page));
+      if (opts.variantIds?.length) {
+        for (const id of opts.variantIds) params.append("variant_id", String(id));
+      }
+      if (opts.locationIds?.length) {
+        for (const id of opts.locationIds) params.append("location_id", String(id));
+      }
+      const result = await this.request<KatanaListResponse<KatanaInventory>>(
+        `/inventory?${params.toString()}`
+      );
+      return result.data ?? [];
+    };
+
+    if (opts.page !== undefined) return readPage(opts.page);
+
+    const rows: KatanaInventory[] = [];
+    for (let page = 1; page <= MAX_INVENTORY_PAGES; page++) {
+      const data = await readPage(page);
+      rows.push(...data);
+      if (data.length < limit) return rows;
     }
-    if (opts.locationIds?.length) {
-      for (const id of opts.locationIds) params.append("location_id", String(id));
-    }
-    const result = await this.request<KatanaListResponse<KatanaInventory>>(
-      `/inventory?${params.toString()}`
+    // Failing beats syncing a partial read, which would zero real stock.
+    throw new IntegrationError(
+      `Katana inventory read did not end after ${MAX_INVENTORY_PAGES} pages`,
+      "KATANA"
     );
-    return result.data ?? [];
   }
 
   /**

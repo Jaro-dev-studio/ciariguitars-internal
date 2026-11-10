@@ -480,6 +480,8 @@ export async function previewKatanaToReverbSync(options: {
     const targetQty = Math.max(0, (inv ? netAvailable(inv) : 0) - heldBack);
     const heldBackNote =
       heldBack > 0 ? ` (holding back ${heldBack} sold on Reverb, not yet in Katana)` : "";
+    // So a surprising number can be checked against Katana's own screens.
+    const stockNote = ` - Katana: ${describeKatanaStock(inv)}${heldBackNote}`;
 
     const planItem: ReverbSyncPlanItem = {
       canonicalSku: item.canonicalSku,
@@ -530,16 +532,18 @@ export async function previewKatanaToReverbSync(options: {
           plan.noop++;
         } else {
           planItem.action = "unpublish";
-          planItem.reason = `Katana net-available is 0 - would unpublish (qty ${currentQty} -> 0)${heldBackNote}`;
+          planItem.reason = isLive
+            ? `Nothing available - would unpublish (qty ${currentQty} -> 0)${stockNote}`
+            : `Nothing available - would set qty ${currentQty} -> 0 (listing is not live)${stockNote}`;
           plan.willUnpublish++;
         }
       } else if (currentQty === targetQty && isLive) {
         planItem.action = "noop";
-        planItem.reason = `Quantities already match${heldBackNote}`;
+        planItem.reason = `Quantities already match${stockNote}`;
         plan.noop++;
       } else {
         planItem.action = "update";
-        planItem.reason = `Would set Reverb qty ${currentQty} -> ${targetQty}${isLive ? "" : " and publish"}${heldBackNote}`;
+        planItem.reason = `Would set Reverb qty ${currentQty} -> ${targetQty}${isLive ? "" : " and publish"}${stockNote}`;
         plan.willUpdate++;
       }
     } catch (err) {
@@ -667,6 +671,14 @@ async function loadReverbListing(
     return reverb.findListingBySku(reverbSku, "all");
   }
   return null;
+}
+
+/** "2 in stock, 1 committed" across all locations, or why there is nothing. */
+function describeKatanaStock(inv: KatanaInventory | undefined): string {
+  if (!inv) return "no stock record for this item";
+  const inStock = parseFloat(inv.quantity_in_stock || "0");
+  const committed = parseFloat(inv.quantity_committed || "0");
+  return `${inStock} in stock, ${committed} committed`;
 }
 
 function heldBackFor(
