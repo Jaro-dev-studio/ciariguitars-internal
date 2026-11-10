@@ -872,12 +872,44 @@ export async function fetchShopFlowWorkOrders(limit = 50) {
       .map(([partId, value]) => ({ partId, ...value }))
       .sort((a, b) => b.count - a.count);
 
+    // Parts matched only loosely (a different revision of the part code). They
+    // block booking until someone confirms the Katana SKU, so list them too.
+    const unconfirmedCounts = new Map<
+      string,
+      { partName: string | null; katanaSku: string; count: number }
+    >();
+    for (const order of workOrders) {
+      const summary = order.resolutionSummary as {
+        resolved?: Array<{
+          partId?: string;
+          partName?: string | null;
+          katanaSku?: string;
+          needsConfirmation?: boolean;
+        }>;
+      } | null;
+      for (const part of summary?.resolved ?? []) {
+        if (!part?.partId || !part.needsConfirmation || !part.katanaSku) continue;
+        const existing = unconfirmedCounts.get(part.partId);
+        if (existing) existing.count += 1;
+        else
+          unconfirmedCounts.set(part.partId, {
+            partName: part.partName ?? null,
+            katanaSku: part.katanaSku,
+            count: 1,
+          });
+      }
+    }
+
+    const unconfirmedParts = [...unconfirmedCounts.entries()]
+      .map(([partId, value]) => ({ partId, ...value }))
+      .sort((a, b) => b.count - a.count);
+
     console.log(
-      `[ShopFlow Work Orders] Loaded ${workOrders.length} work orders, ${unmappedParts.length} distinct unmapped part(s)`
+      `[ShopFlow Work Orders] Loaded ${workOrders.length} work orders, ${unmappedParts.length} distinct unmapped part(s), ${unconfirmedParts.length} to confirm`
     );
 
     return {
-      data: { workOrders, statusCounts, unmappedParts },
+      data: { workOrders, statusCounts, unmappedParts, unconfirmedParts },
       error: null,
     };
   } catch (error) {

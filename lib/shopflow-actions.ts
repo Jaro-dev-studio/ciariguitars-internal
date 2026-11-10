@@ -5,6 +5,10 @@ import { getServerSession } from "next-auth";
 
 import { authOptions } from "@/authOptions";
 import prisma from "@/lib/prisma";
+import {
+  setShopFlowBookingsLive,
+  type ShopFlowBookingsState,
+} from "@/lib/shopflow/bookings-switch";
 import { normalisePartCode } from "@/lib/shopflow/part-matching";
 import { reprocessWorkOrder } from "@/lib/shopflow/process-work-order";
 
@@ -123,5 +127,32 @@ export async function reprocessShopFlowWorkOrder(
   } catch (error) {
     console.error("[ShopFlowMapping] Reprocess failed:", error);
     return { data: null, error: "Failed to reprocess work order" };
+  }
+}
+
+/**
+ * Switches booking Shop Flow work orders into Katana on or off. Work orders
+ * first received before it is switched on are never booked automatically.
+ */
+export async function setShopFlowBookingsLiveNow(live: boolean): Promise<{
+  data: ShopFlowBookingsState | null;
+  error: string | null;
+}> {
+  try {
+    const userId = await requireAuth();
+    if (!userId) return { data: null, error: "Not authenticated" };
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+    const state = await setShopFlowBookingsLive(live, user?.email ?? userId);
+
+    revalidatePath(EVENTS_PATH);
+    revalidatePath("/dashboard/integrations");
+    return { data: state, error: null };
+  } catch (error) {
+    console.error("[ShopFlowMapping] Switching Shop Flow bookings failed:", error);
+    return { data: null, error: "Could not switch Shop Flow bookings" };
   }
 }

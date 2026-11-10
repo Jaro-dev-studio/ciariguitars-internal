@@ -9,11 +9,11 @@ import {
 } from "@prisma/client";
 
 import prisma from "@/lib/prisma";
-import { getIntegrationConfig } from "@/lib/integrations/config";
 import { katana } from "@/lib/integrations/katana";
 import { resolveDefaultLocationId } from "@/lib/integrations/katana-location";
 import { recordSyncLog } from "@/lib/integrations/sync-logger";
 
+import { getShopFlowBookingsState } from "./bookings-switch";
 import { parseWorkOrder, type ParsedWorkOrder } from "./contract";
 import { resolveFinishedGood, type InstrumentResolution } from "./instrument-resolver";
 import { calculateConsumptionDelta, type BookedPart } from "./part-matching";
@@ -42,6 +42,9 @@ export interface WorkOrderProcessResult {
   };
 }
 
+/** Ledger id for the guitar a build produces, alongside the parts it used. */
+const FINISHED_GOOD_PART_ID = "finished-good";
+
 function toBookedParts(resolution: PartResolution): BookedPart[] {
   return resolution.resolved.map((part) => ({
     partId: part.partId,
@@ -49,6 +52,21 @@ function toBookedParts(resolution: PartResolution): BookedPart[] {
     variantId: part.variantId,
     quantity: part.quantity,
   }));
+}
+
+/**
+ * The finished guitar goes in the same ledger as the parts, as -1 consumed,
+ * so the adjustment adds it to stock and a revision that corrects the finish
+ * moves it from the wrong variant to the right one.
+ */
+function finishedGoodLine(finishedGood: InstrumentResolution): BookedPart | null {
+  if (!finishedGood.sku || !finishedGood.variantId) return null;
+  return {
+    partId: FINISHED_GOOD_PART_ID,
+    katanaSku: finishedGood.sku,
+    variantId: finishedGood.variantId,
+    quantity: -1,
+  };
 }
 
 function readBookedParts(value: unknown): BookedPart[] {
@@ -79,22 +97,27 @@ function readBookedParts(value: unknown): BookedPart[] {
  *    is stable. A work order can be reopened and completed again, so a repeat
  *    delivery is treated as a revision - only the difference against what was
  *    already booked is applied.
- * 2. Only `InstrumentType: "build"` produces new stock. A repair is work on a
- *    guitar the customer already owns; its parts are consumed, but incrementing
- *    finished goods would put someone else's instrument up for sale.
- * 3. Nothing is booked while any part is unmapped or matched only tolerantly.
- *    A partial decrement is harder to reconcile than none at all, and the work
- *    order can be reprocessed once the mappings are filled in.
+ * 2. Only `InstrumentType: "build"` produces new stock: its parts are consumed
+ *    and the finished guitar is added. A repair is work on a guitar the
+ *    customer already owns; its parts are consumed, but incrementing finished
+ *    goods would put someone else's instrument up for sale.
+ * 3. Nothing is booked while any part is unmapped or matched only tolerantly,
+ *    or while a build's finished guitar cannot be identified. A partial
+ *    booking is harder to reconcile than none at all, and the work order can
+ *    be reprocessed once the gaps are filled in.
+ * 4. Nothing is booked while the Shop Flow switch is off, and work orders first
+ *    received before it was last switched on are never booked: they were
+ *    handled in Katana by hand.
  */
 export async function processWorkOrder(
   workOrder: ParsedWorkOrder,
   rawPayload: unknown
 ): Promise<WorkOrderProcessResult> {
-  const { flags } = getIntegrationConfig();
-  const writesEnabled = flags.katanaWritesEnabled && !flags.dryRun;
+  const bookings = await getShopFlowBookingsState();
+  const writesEnabled = bookings.live;
 
   console.log(
-    `[ShopFlowWorkOrder] Processing invoice ${workOrder.invoiceId} (${workOrder.instrumentType}, Katana writes ${writesEnabled ? "ENABLED" : "DISABLED"})`
+    `[ShopFlowWorkOrder] Processing invoice ${workOrder.invoiceId} (${workOrder.instrumentType}, Katana writes ${writesEnabled ? "ENABLED" : "DISABLED - Shop Flow switch off"})`
   );
 
   const existing = await prisma.shopFlowWorkOrder.findUnique({
@@ -102,6 +125,10 @@ export async function processWorkOrder(
   });
   const isRedelivery = Boolean(existing);
   const deliveryCount = (existing?.deliveryCount ?? 0) + 1;
+
+  const firstSeenAt = existing?.firstSeenAt ?? new Date();
+  const receivedBeforeCutover =
+    bookings.liveSince !== null && firstSeenAt < new Date(bookings.liveSince);
 
   if (isRedelivery) {
     console.log(
@@ -140,16 +167,26 @@ export async function processWorkOrder(
       `${needsConfirmation.length} part(s) matched only by revision-tolerant fallback and need confirming`
     );
   }
+  const finishedLine = workOrder.isBuild ? finishedGoodLine(finishedGood) : null;
+  if (workOrder.isBuild && !finishedLine) {
+    blockers.push(`finished guitar not identified (${finishedGood.detail})`);
+  }
 
   let status: ShopFlowWorkOrderStatus;
   if (blockers.length > 0) status = ShopFlowWorkOrderStatus.NEEDS_MAPPING;
   else if (!workOrder.isBuild) status = ShopFlowWorkOrderStatus.REPAIR;
   else status = ShopFlowWorkOrderStatus.RESOLVED;
 
-  // What this delivery says was consumed, less whatever is already booked.
+  // What this delivery says was consumed (and built), less whatever is already
+  // booked.
   const currentParts = toBookedParts(resolution);
+  if (finishedLine) currentParts.push(finishedLine);
   const alreadyBooked = readBookedParts(existing?.bookedParts);
   const delta = calculateConsumptionDelta(alreadyBooked, currentParts);
+  // A redelivery with nothing new to book stays booked.
+  if (blockers.length === 0 && existing?.bookedAt && delta.length === 0) {
+    status = ShopFlowWorkOrderStatus.BOOKED;
+  }
 
   const stock: WorkOrderProcessResult["stock"] = {
     applied: false,
@@ -158,23 +195,23 @@ export async function processWorkOrder(
     skippedReason: null,
   };
 
-  if (blockers.length > 0) {
+  if (receivedBeforeCutover) {
+    stock.skippedReason = `Received before Shop Flow bookings were switched on (${bookings.liveSince}), so it is handled in Katana by hand`;
+  } else if (blockers.length > 0) {
     stock.skippedReason = blockers.join("; ");
   } else if (delta.length === 0) {
     stock.skippedReason = isRedelivery
       ? "Redelivery with no change to the parts list"
       : "No resolvable parts to book";
   } else if (!writesEnabled) {
-    stock.skippedReason = flags.dryRun
-      ? "SYNC_DRY_RUN is on"
-      : "Katana writes are disabled";
+    stock.skippedReason = "Shop Flow switch is off";
     console.log(
       `[ShopFlowWorkOrder] [dry-run] would adjust ${delta.length} Katana variant(s) for invoice ${workOrder.invoiceId}`
     );
   }
 
   const shouldWrite =
-    writesEnabled && blockers.length === 0 && delta.length > 0;
+    writesEnabled && !receivedBeforeCutover && blockers.length === 0 && delta.length > 0;
 
   if (shouldWrite) {
     console.log(
@@ -182,16 +219,21 @@ export async function processWorkOrder(
     );
     // A single adjustment keeps the whole work order atomic in Katana and
     // leaves one reference to trace back to.
-    const adjustment = await katana.createStockAdjustment({
-      location_id: await resolveDefaultLocationId(),
-      reason: workOrder.isBuild ? "Shop Flow build" : "Shop Flow repair",
-      additional_info: `Shop Flow invoice ${workOrder.invoiceId}${workOrder.serialNumber ? ` (serial ${workOrder.serialNumber})` : ""}`,
-      stock_adjustment_rows: delta.map((row) => ({
-        variant_id: Number(row.variantId),
-        // Consumption reduces stock; a revision that removed a part returns it.
-        quantity: -row.quantity,
-      })),
-    });
+    // The Shop Flow switch already allowed this write.
+    const adjustment = await katana.createStockAdjustment(
+      {
+        location_id: await resolveDefaultLocationId(),
+        reason: workOrder.isBuild ? "Shop Flow build" : "Shop Flow repair",
+        additional_info: `Shop Flow invoice ${workOrder.invoiceId}${workOrder.serialNumber ? ` (serial ${workOrder.serialNumber})` : ""}`,
+        stock_adjustment_rows: delta.map((row) => ({
+          variant_id: Number(row.variantId),
+          // Consumption reduces stock and the built guitar (booked as -1
+          // consumed) adds one; a revision that removed a part returns it.
+          quantity: -row.quantity,
+        })),
+      },
+      { allowWrite: true }
+    );
     stock.applied = true;
     stock.adjustmentId = String(adjustment.id);
     status = ShopFlowWorkOrderStatus.BOOKED;
@@ -203,6 +245,7 @@ export async function processWorkOrder(
   const resolutionSummary = {
     resolved: resolution.resolved.map((part) => ({
       partId: part.partId,
+      partName: part.partName,
       katanaSku: part.katanaSku,
       quantity: part.quantity,
       strategy: part.strategy,

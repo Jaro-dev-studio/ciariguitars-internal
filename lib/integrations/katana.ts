@@ -227,8 +227,8 @@ class KatanaClient {
   }
 
   /**
-   * `allowWrite` is for callers gated by their own switch (Reverb sales follow
-   * the Reverb link) rather than SYNC_KATANA_WRITES_ENABLED.
+   * `allowWrite` is for callers gated by their own dashboard switch (Reverb
+   * sales and Shop Flow bookings) rather than SYNC_KATANA_WRITES_ENABLED.
    */
   async createStockAdjustment(
     payload: {

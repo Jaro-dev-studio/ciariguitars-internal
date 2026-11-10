@@ -248,6 +248,22 @@ describe("calculateConsumptionDelta", () => {
     ]);
   });
 
+  // A build's finished guitar is booked as -1 consumed, so it adds one to stock.
+  it("adds the finished guitar once, however often the build is resent", () => {
+    const booked = [part("1", 2), part("guitar-sg", -1)];
+    expect(calculateConsumptionDelta([], booked)).toEqual(booked);
+    expect(calculateConsumptionDelta(booked, booked)).toEqual([]);
+  });
+
+  it("moves the finished guitar when a revision corrects its finish", () => {
+    expect(
+      calculateConsumptionDelta(
+        [part("1", 2), part("guitar-sg", -1)],
+        [part("1", 2), part("guitar-jb", -1)]
+      )
+    ).toEqual([part("guitar-sg", 1), part("guitar-jb", -1)]);
+  });
+
   it("handles a swap in a single pass", () => {
     const delta = calculateConsumptionDelta([part("1", 1)], [part("2", 1)]);
     expect(delta).toEqual([part("1", -1), part("2", 1)]);

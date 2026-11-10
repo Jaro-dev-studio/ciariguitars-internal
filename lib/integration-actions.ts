@@ -20,6 +20,7 @@ import {
   type ReverbLinkState,
 } from "@/lib/integrations/reverb-link";
 import { pollReverbOrders } from "@/lib/integrations/sale-handler";
+import { getShopFlowBookingsState } from "@/lib/shopflow/bookings-switch";
 import { touchIntegrationLastSync } from "@/lib/integrations/sync-logger";
 import { setSyncRunSummary, withSyncRun } from "@/lib/integrations/sync-run";
 import { cleanupAlertsCore, type AlertCleanupResult } from "@/lib/integrations/alert-maintenance";
@@ -53,10 +54,13 @@ export async function testConnections(): Promise<{
 
     console.log("[IntegrationActions] Testing platform connections...");
     const config = getIntegrationConfig();
-    const { live: reverbLinkLive } = await getReverbLinkState();
-    // Katana is written to by Reverb sales (Reverb link) and by Shop Flow (env flags).
-    const katanaWrites =
-      reverbLinkLive || (config.flags.katanaWritesEnabled && !config.flags.dryRun);
+    const [{ live: reverbLinkLive }, { live: shopflowBookingsLive }] = await Promise.all([
+      getReverbLinkState(),
+      getShopFlowBookingsState(),
+    ]);
+    // Katana is written to by Reverb sales and Shop Flow work orders, each
+    // behind its own dashboard switch.
+    const katanaWrites = reverbLinkLive || shopflowBookingsLive;
 
     const connections = await prisma.integrationConnection.findMany();
     const lastSyncByPlatform = new Map(
@@ -125,7 +129,7 @@ export async function testConnections(): Promise<{
       detail: config.shopflow.isConfigured
         ? "Configured (client not yet implemented)"
         : "Pending GitSuite endpoints",
-      writesEnabled: config.flags.shopflowWritesEnabled,
+      writesEnabled: shopflowBookingsLive,
       lastSyncAt: lastSyncByPlatform.get(IntegrationPlatform.SHOPFLOW)?.toISOString() ?? null,
     });
 

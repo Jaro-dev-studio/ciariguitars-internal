@@ -19,20 +19,13 @@ export interface IntegrationConfig {
     webhookSecret: string;
     isConfigured: boolean;
   };
-  /**
-   * Write flags for Shop Flow and its Katana stock movements. The Reverb <->
-   * Katana link is not governed here: it has its own switch on the dashboard
-   * (see reverb-link.ts).
-   */
   flags: {
     /**
-     * Master safety switch. When true (the default), these writes are not made
-     * regardless of the per-platform flags below - they run as a dry run that
-     * only reports what WOULD change. Set SYNC_DRY_RUN="false" to allow them.
+     * Fallback guard for Katana writes. The Reverb link and Shop Flow bookings
+     * have their own dashboard switches (see live-switch.ts) and bypass it;
+     * any other Katana write is blocked unless this is on.
      */
-    dryRun: boolean;
     katanaWritesEnabled: boolean;
-    shopflowWritesEnabled: boolean;
   };
 }
 
@@ -73,9 +66,7 @@ export function getIntegrationConfig(): IntegrationConfig {
     },
     flags: {
       // Defaults to true so nothing is ever written until explicitly enabled.
-      dryRun: bool(process.env.SYNC_DRY_RUN, true),
       katanaWritesEnabled: bool(process.env.SYNC_KATANA_WRITES_ENABLED),
-      shopflowWritesEnabled: bool(process.env.SYNC_SHOPFLOW_WRITES_ENABLED),
     },
   };
 }

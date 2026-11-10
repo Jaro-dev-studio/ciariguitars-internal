@@ -15,6 +15,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { LiveSwitchBanner } from "@/components/integrations/live-switch-banner";
 import {
   Table,
   TableBody,
@@ -26,8 +27,10 @@ import {
 import { cn, formatTimeAgo } from "@/lib/utils";
 import {
   reprocessShopFlowWorkOrder,
+  setShopFlowBookingsLiveNow,
   upsertShopFlowPartMapping,
 } from "@/lib/shopflow-actions";
+import type { ShopFlowBookingsState } from "@/lib/shopflow/bookings-switch";
 
 export interface ShopFlowWorkOrderRow {
   invoiceId: string;
@@ -46,6 +49,7 @@ export interface ShopFlowWorkOrderRow {
   partsResolved: number;
   partsUnresolved: number;
   finishedGoodDetail: string | null;
+  notBookedReason: string | null;
 }
 
 export interface UnmappedPartRow {
@@ -54,10 +58,17 @@ export interface UnmappedPartRow {
   count: number;
 }
 
+export interface UnconfirmedPartRow extends UnmappedPartRow {
+  /** The Katana SKU it was loosely matched to. */
+  katanaSku: string;
+}
+
 interface ShopFlowWorkOrdersProps {
   workOrders: ShopFlowWorkOrderRow[];
   statusCounts: Record<string, number>;
   unmappedParts: UnmappedPartRow[];
+  unconfirmedParts: UnconfirmedPartRow[];
+  bookings: ShopFlowBookingsState;
 }
 
 const STATUS_STYLES: Record<string, { label: string; className: string }> = {
@@ -100,6 +111,8 @@ export function ShopFlowWorkOrders({
   workOrders,
   statusCounts,
   unmappedParts,
+  unconfirmedParts,
+  bookings,
 }: ShopFlowWorkOrdersProps) {
   const router = useRouter();
   const [pendingInvoice, setPendingInvoice] = useState<string | null>(null);
@@ -129,6 +142,29 @@ export function ShopFlowWorkOrders({
 
   return (
     <div className="flex flex-col gap-6">
+      <LiveSwitchBanner
+        id="shopflow-bookings-switch"
+        label="Shop Flow bookings"
+        state={bookings}
+        live={{
+          title: "Live - completed Shop Flow work orders are booked into Katana automatically.",
+          body: "Builds take their parts out of Katana and add the finished guitar; repairs take their parts out. Finished guitars no longer need adding to Katana by hand.",
+        }}
+        off={{
+          title: "Dry run - Shop Flow bookings are off, so nothing is written to Katana.",
+          body: "Work orders are still received and checked below. Finished guitars still need adding to Katana by hand.",
+        }}
+        confirmOn={{
+          title: "Switch Shop Flow bookings on?",
+          body: "Work orders received from now on will be booked into Katana once every part is mapped: builds take their parts out and add the finished guitar, repairs take their parts out. Work orders received before now are never booked, so stop adding finished guitars to Katana by hand from now on.",
+        }}
+        confirmOff={{
+          title: "Switch Shop Flow bookings off?",
+          body: "Nothing will be written to Katana until it is switched back on, and work orders received in the meantime will never be booked automatically. Add finished guitars to Katana by hand until then.",
+        }}
+        onSwitch={setShopFlowBookingsLiveNow}
+      />
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <SummaryCard
           icon={<CheckCircle2 className="text-emerald-600 size-4" />}
@@ -149,6 +185,10 @@ export function ShopFlowWorkOrders({
 
       {unmappedParts.length > 0 && (
         <UnmappedPartsCard parts={unmappedParts} />
+      )}
+
+      {unconfirmedParts.length > 0 && (
+        <UnconfirmedPartsCard parts={unconfirmedParts} />
       )}
 
       <Card>
@@ -203,6 +243,11 @@ export function ShopFlowWorkOrders({
                         {order.blockedReason && (
                           <div className="mt-1 max-w-64 text-xs text-muted-foreground">
                             {order.blockedReason}
+                          </div>
+                        )}
+                        {order.notBookedReason && (
+                          <div className="mt-1 max-w-64 text-xs text-muted-foreground">
+                            Not booked: {order.notBookedReason}
                           </div>
                         )}
                       </TableCell>
@@ -297,9 +342,41 @@ function UnmappedPartsCard({ parts }: { parts: UnmappedPartRow[] }) {
   );
 }
 
-function UnmappedPartRowForm({ part }: { part: UnmappedPartRow }) {
+function UnconfirmedPartsCard({ parts }: { parts: UnconfirmedPartRow[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Parts to confirm</CardTitle>
+        <CardDescription>
+          These Shop Flow part numbers only matched a Katana SKU with a
+          different revision. Confirm the SKU if it is the right part, or enter
+          the correct one. Work orders stay unbooked until every part is
+          confirmed.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {parts.map((part) => (
+          <UnmappedPartRowForm
+            key={part.partId}
+            part={part}
+            suggestedSku={part.katanaSku}
+          />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function UnmappedPartRowForm({
+  part,
+  suggestedSku,
+}: {
+  part: UnmappedPartRow;
+  /** Loosely matched SKU to confirm, prefilled. */
+  suggestedSku?: string;
+}) {
   const router = useRouter();
-  const [sku, setSku] = useState("");
+  const [sku, setSku] = useState(suggestedSku ?? "");
   const [isPending, startTransition] = useTransition();
 
   const save = (isIgnored: boolean) => {
@@ -324,13 +401,14 @@ function UnmappedPartRowForm({ part }: { part: UnmappedPartRow }) {
   return (
     <div className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-sm">{part.partId}</div>
-        <div className="truncate text-xs text-muted-foreground">
+        <div className="break-words font-mono text-sm">{part.partId}</div>
+        <div className="break-words text-xs text-muted-foreground">
           {part.partName ?? "No description"} - in {part.count} work order
           {part.count === 1 ? "" : "s"}
+          {suggestedSku ? ` - matched to ${suggestedSku}` : ""}
         </div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         <Input
           value={sku}
           onChange={(event) => setSku(event.target.value)}
@@ -343,7 +421,13 @@ function UnmappedPartRowForm({ part }: { part: UnmappedPartRow }) {
           onClick={() => save(false)}
           disabled={isPending || !sku.trim()}
         >
-          {isPending ? <Loader2 className="size-4 animate-spin" /> : "Map"}
+          {isPending ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : suggestedSku ? (
+            "Confirm"
+          ) : (
+            "Map"
+          )}
         </Button>
         <Button
           size="sm"

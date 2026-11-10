@@ -50,8 +50,9 @@ export function IntegrationsClient({ integrations, syncConfigs, error }: Integra
         This is the operations hub for the connections themselves. The live status panel lets you
         confirm Katana, Reverb and Shop Flow are reachable, manually run a sync, poll Reverb for new
         orders, and register webhooks. Below it you can see the stored connection records and which
-        automated sync jobs are enabled. The Reverb link is switched on and off on the Inventory
-        Sync page; API keys and the Shop Flow write flags live in environment variables, not here.
+        automated sync jobs are enabled. The Reverb link and Shop Flow bookings are switched on and
+        off on the Inventory Sync and Shop Flow Events pages; API keys live in environment
+        variables, not here.
       </PageIntro>
 
       {error && (
