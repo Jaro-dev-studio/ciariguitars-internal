@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { SyncSource } from "@prisma/client";
+import {
+  IntegrationPlatform,
+  SyncDirection,
+  SyncSource,
+  SyncStatus,
+  SyncType,
+} from "@prisma/client";
 import { runKatanaToReverbSync } from "@/lib/integrations/inventory-sync";
+import { recordSyncLog } from "@/lib/integrations/sync-logger";
 import { setSyncRunSummary, withSyncRun } from "@/lib/integrations/sync-run";
+import { syncMappingsCore } from "@/lib/sku-mapping-core";
 
 export const maxDuration = 300;
 
@@ -28,6 +36,27 @@ export async function GET(request: NextRequest) {
     const syncResult = await withSyncRun(
       { source: SyncSource.CRON, trigger: "sync-inventory" },
       async () => {
+        // Same as the Sync mappings button: a listing whose SKU now matches
+        // Katana is linked before the push, rather than waiting for someone to
+        // click it. If this fails the existing links still get pushed.
+        console.log("[CronInventorySync] Refreshing SKU mappings...");
+        try {
+          const mappings = await syncMappingsCore();
+          setSyncRunSummary({ mappingsCreated: mappings.created });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          console.error("[CronInventorySync] Mapping refresh failed:", msg);
+          setSyncRunSummary({ mappingRefreshError: msg });
+          await recordSyncLog({
+            syncType: SyncType.SKU_MAPPING,
+            platform: IntegrationPlatform.REVERB,
+            status: SyncStatus.FAILED,
+            direction: SyncDirection.INBOUND,
+            errorMessage: msg,
+            details: "Automatic Sync mappings failed; pushed existing links only",
+          });
+        }
+
         const locationId = process.env.KATANA_DEFAULT_LOCATION_ID;
         console.log("[CronInventorySync] Pushing Katana availability to Reverb...");
         const result = await runKatanaToReverbSync({

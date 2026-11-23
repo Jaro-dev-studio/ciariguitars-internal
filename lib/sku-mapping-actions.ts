@@ -5,7 +5,7 @@ import { IntegrationPlatform } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/authOptions";
-import { autoMatchByExactSkuCore, normalizeSku } from "@/lib/sku-mapping-core";
+import { autoMatchByExactSkuCore, normalizeSku, syncMappingsCore } from "@/lib/sku-mapping-core";
 import { importCatalogsCore } from "@/lib/sku-mapping-import";
 import type { ExactMatchResultItem } from "@/lib/sku-mapping-core";
 import { computeMappingDiagnostics } from "@/lib/sku-mapping-diagnostics";
@@ -111,27 +111,13 @@ export async function syncMappings(): Promise<{
 
     console.log("[SKUMapping] Sync mappings: importing catalogs then auto-matching by exact SKU...");
 
-    const imported = await importCatalogsCore();
+    const result = await syncMappingsCore();
     console.log(
-      `[SKUMapping] Sync mappings: imported ${imported.katanaVariants} Katana variants, ${imported.reverbListings} Reverb listings`
-    );
-
-    const match = await autoMatchByExactSkuCore();
-    console.log(
-      `[SKUMapping] Sync mappings: created ${match.created}, ambiguous ${match.ambiguous}, skipped ${match.skipped}`
+      `[SKUMapping] Sync mappings: imported ${result.katanaVariants} Katana variants, ${result.reverbListings} Reverb listings; created ${result.created}, ambiguous ${result.ambiguous}, skipped ${result.skipped}`
     );
 
     revalidatePath("/dashboard/sku-mapping");
-    return {
-      data: {
-        katanaVariants: imported.katanaVariants,
-        reverbListings: imported.reverbListings,
-        created: match.created,
-        ambiguous: match.ambiguous,
-        skipped: match.skipped,
-      },
-      error: null,
-    };
+    return { data: result, error: null };
   } catch (error) {
     console.error("[SKUMapping] syncMappings failed:", error);
     return {

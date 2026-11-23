@@ -2,6 +2,7 @@ import "server-only";
 
 import { IntegrationPlatform } from "@prisma/client";
 import prisma from "@/lib/prisma";
+import { importCatalogsCore, type CatalogImportResult } from "@/lib/sku-mapping-import";
 
 export interface ExactMatchResultItem {
   canonicalSku: string;
@@ -183,4 +184,26 @@ export async function autoMatchByExactSkuCore(): Promise<ExactMatchResult> {
   );
 
   return { created, ambiguous, skipped, items };
+}
+
+export interface MappingRefreshResult extends CatalogImportResult {
+  created: number;
+  ambiguous: number;
+  skipped: number;
+}
+
+/**
+ * Re-imports both catalogs, then links every item whose Katana and Reverb SKUs
+ * now match - the Sync mappings button. The inventory cron runs it as well, so
+ * a SKU fixed on either side is linked on the next run without anyone clicking.
+ */
+export async function syncMappingsCore(): Promise<MappingRefreshResult> {
+  const imported = await importCatalogsCore();
+  const match = await autoMatchByExactSkuCore();
+  return {
+    ...imported,
+    created: match.created,
+    ambiguous: match.ambiguous,
+    skipped: match.skipped,
+  };
 }
