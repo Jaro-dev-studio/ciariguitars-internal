@@ -59,8 +59,8 @@ export async function importCatalogs(): Promise<{
  * maintains canonical SKUs on Reverb. Only unambiguous cases are mapped:
  *   - canonical SKU not already mapped
  *   - a single live (or, failing that, single draft) Reverb listing shares the SKU
- * Everything else is reported but left untouched. Reverb "unique" listings
- * (has_inventory = false) are excluded from the candidate pool.
+ * Everything else is reported but left untouched. One-off listings
+ * (has_inventory = false) are candidates only while live or a draft.
  */
 export async function autoMatchByExactSku(): Promise<{
   data: { created: number; ambiguous: number; skipped: number; items: ExactMatchResultItem[] } | null;
@@ -562,8 +562,10 @@ export async function fetchMappingData(): Promise<{
       isMapped: mappedKatanaIds.has(v.variantId),
     }));
 
-    // Exclude Reverb "unique" (one-of-a-kind) listings (has_inventory = false)
-    // from the mapping pool. Null = unknown, so it stays available.
+    // One-off listings (has_inventory = false) stay out of the hand-mapping
+    // pool: they are synced only when they carry the Katana SKU, and then
+    // Sync mappings links them by that SKU. A one-off linked by hand without
+    // it would never sync. Null = unknown, so it stays available.
     const unmappedReverb: UnmappedReverb[] = reverbCatalog
       .filter((l) => !mappedReverbIds.has(l.listingId) && l.hasInventory !== false)
       .map((l) => ({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mappingDriftReason } from "./mapping-guard";
+import { carriesSku, mappingDriftReason } from "./mapping-guard";
 
 describe("mappingDriftReason", () => {
   it("passes a mapping whose SKUs still match", () => {
@@ -69,5 +69,19 @@ describe("mappingDriftReason", () => {
         reverbSku: "CIARI-SOLO-VB-RA",
       })
     ).toBeNull();
+  });
+});
+
+describe("carriesSku", () => {
+  it("accepts the listing's own copy of the SKU, ignoring stray dashes and casing", () => {
+    expect(carriesSku("CIARI-STDP-OWG-L", "CIARI-STDP-OWG-L")).toBe(true);
+    expect(carriesSku("-ciari-stdp-owg-l", "CIARI-STDP-OWG-L")).toBe(true);
+  });
+
+  it("rejects a blank SKU, Reverb's placeholder, or another SKU", () => {
+    expect(carriesSku(null, "CIARI-STDP-OWG-L")).toBe(false);
+    expect(carriesSku("", "CIARI-STDP-OWG-L")).toBe(false);
+    expect(carriesSku("rev-100181650", "CIARI-STDP-OWG-L")).toBe(false);
+    expect(carriesSku("CIARI-STDP-JBG-L", "CIARI-STDP-OWG-L")).toBe(false);
   });
 });

@@ -16,7 +16,8 @@ function isAuthorized(request: NextRequest): boolean {
 }
 
 /**
- * Order Sync cron (every 10 min): polls Reverb for recent sales and decrements
+ * Order Sync cron (every 5 min, offset from the inventory push so the two
+ * don't start together): polls Reverb for recent sales and decrements
  * Katana stock for each matched order. While the Reverb link is switched off this
  * runs as a dry run - it still writes sync logs (flagged dryRun) but never
  * touches Katana.

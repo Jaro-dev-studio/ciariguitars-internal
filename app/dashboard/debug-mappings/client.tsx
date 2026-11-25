@@ -52,7 +52,6 @@ const BUCKET_META: {
   { key: "readyToMap", label: "Ready to map on re-sync", tone: "text-primary", bar: "bg-primary" },
   { key: "noReverbListing", label: "No Reverb listing for SKU", tone: "text-muted-foreground", bar: "bg-muted-foreground/50" },
   { key: "onlySoldEnded", label: "Only sold / ended listings", tone: "text-warning", bar: "bg-warning" },
-  { key: "uniqueExcludedMatch", label: "Matched listing is one-of-a-kind", tone: "text-warning", bar: "bg-warning/60" },
   { key: "blockedByMapping", label: "Blocked (listing mapped to another item)", tone: "text-destructive", bar: "bg-destructive/70" },
   { key: "ambiguous", label: "Ambiguous (multiple live share SKU)", tone: "text-destructive", bar: "bg-destructive" },
 ];
@@ -326,7 +325,7 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
             <StatCard icon={Boxes} value={data.katana.totalVariants} label="Katana Variants" tone="bg-secondary/10 text-secondary" />
             <StatCard icon={Link2} value={data.mappings.total} label="Currently Mapped" tone="bg-accent/10 text-accent" />
             <StatCard icon={CheckCircle2} value={data.reverb.syncable} label="Syncable Reverb" tone="bg-primary/10 text-primary" />
-            <StatCard icon={XCircle} value={data.reverb.uniqueExcluded} label="One-of-a-kind (excluded)" tone="bg-warning/10 text-warning" />
+            <StatCard icon={XCircle} value={data.reverb.oneOffGone} label="One-offs sold or ended" tone="bg-warning/10 text-warning" />
           </div>
 
           {recoverable > 0 && (
@@ -377,9 +376,10 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
             <CardHeader className="pb-3">
               <CardTitle className="text-lg">Why the ceiling is ~{data.reverb.syncable}, not {data.katana.totalVariants}</CardTitle>
               <CardDescription>
-                Reverb returns {data.reverb.totalListings} listings, but {data.reverb.uniqueExcluded} are
-                one-of-a-kind (has_inventory = false) and excluded from mapping by design. Only{" "}
-                {data.reverb.syncable} in-stock listings are eligible.
+                Reverb returns {data.reverb.totalListings} listings, but {data.reverb.oneOffGone} are
+                one-off listings (has_inventory = false) that have sold or ended, so there is
+                nothing left to sync. A one-off is linked while it is live or a draft and carries
+                the Katana SKU. {data.reverb.syncable} listings are eligible.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -392,10 +392,10 @@ export function DebugMappingsClient({ initialData, initialError }: DebugMappings
                 </div>
                 <div
                   className="flex items-center bg-muted pl-2.5 text-muted-foreground"
-                  style={{ flex: Math.max(data.reverb.uniqueExcluded, 1) }}
+                  style={{ flex: Math.max(data.reverb.oneOffGone, 1) }}
                 >
                   <span className="truncate text-xs">
-                    {data.reverb.uniqueExcluded} one-of-a-kind, excluded
+                    {data.reverb.oneOffGone} one-offs sold or ended
                   </span>
                 </div>
               </div>

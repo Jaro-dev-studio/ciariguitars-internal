@@ -11,7 +11,8 @@ import {
 import prisma from "@/lib/prisma";
 import { IntegrationError } from "./config";
 import { katana, netAvailable, type KatanaInventory } from "./katana";
-import { mappingDriftReason } from "./mapping-guard";
+import { isOneOffListing, planListingChange, type ListingChange } from "./listing-change";
+import { carriesSku, mappingDriftReason } from "./mapping-guard";
 import { reverb, type ReverbListing } from "./reverb";
 import { isReverbLinkLive } from "./reverb-link";
 import { pendingReverbSalesByListing } from "./sale-handler";
@@ -26,6 +27,8 @@ export interface ReverbSyncItemResult {
   targetQty: number;
   action: "updated" | "unpublished" | "noop" | "skipped" | "failed" | "would-update" | "would-unpublish";
   dryRun: boolean;
+  /** A one-off listing: "unpublished" means ended, "updated" means published. */
+  oneOff?: boolean;
   error?: string;
 }
 
@@ -46,9 +49,10 @@ export interface ReverbSyncRunResult {
  * Pushes Katana "available to sell" (in_stock - committed) quantities onto the
  * matching Reverb listings, minus any Reverb sales not booked in Katana yet.
  * When availability hits 0 the Reverb listing is unpublished (per client
- * decision). Writes only happen while the Reverb link is switched on - with it
- * off, we run a full dry-run and log exactly what WOULD happen without touching
- * Reverb.
+ * decision), or ended if it is a one-off. What happens to each listing is
+ * decided by planListingChange. Writes only happen while the Reverb link is
+ * switched on - with it off, we run a full dry-run and log exactly what WOULD
+ * happen without touching Reverb.
  */
 export async function runKatanaToReverbSync(options: {
   locationIds?: number[];
@@ -234,74 +238,91 @@ export async function runKatanaToReverbSync(options: {
         continue;
       }
 
-      const shouldUnpublish = targetQty <= 0;
-      const isLive = listing.state?.slug === "live";
+      const oneOff = isOneOffListing({ hasInventory: listing.has_inventory });
+      itemResult.oneOff = oneOff || undefined;
+      const change = planListingChange(
+        {
+          state: listing.state?.slug ?? null,
+          inventory: listing.inventory,
+          hasInventory: listing.has_inventory,
+          carriesKatanaSku: carriesSku(listing.sku, item.canonicalSku),
+        },
+        targetQty
+      );
 
-      // Decide the action.
-      if (shouldUnpublish) {
-        if (!isLive && currentQty === 0) {
+      // Act on it. With the Reverb link off, nothing is written.
+      switch (change.kind) {
+        case "noop":
           itemResult.action = "noop";
           result.noop++;
-        } else if (!writesEnabled) {
-          itemResult.action = "would-unpublish";
+          break;
+        case "leave":
+          itemResult.action = "skipped";
+          itemResult.error = change.note;
+          result.skipped++;
+          console.log(
+            `[ReverbSync] LEFT ALONE ${item.canonicalSku} (reverb ${listing.id}): ${change.note}`
+          );
+          break;
+        case "unpublish":
+        case "end":
+          if (writesEnabled) {
+            if (change.kind === "end") await reverb.endListing(listing);
+            else await reverb.unpublishListing(listing);
+          }
+          itemResult.action = writesEnabled ? "unpublished" : "would-unpublish";
           result.unpublished++;
           console.log(
-            `[ReverbSync] [dry-run] would UNPUBLISH ${item.canonicalSku} (reverb ${listing.id}) qty ${currentQty} -> 0`
+            `[ReverbSync] ${writesEnabled ? "" : "[dry-run] would "}${change.kind === "end" ? "END one-off" : "UNPUBLISH"} ${item.canonicalSku} (reverb ${listing.id}) qty ${currentQty} -> 0`
           );
-        } else {
-          await reverb.unpublishListing(listing);
-          itemResult.action = "unpublished";
-          result.unpublished++;
+          break;
+        case "set-quantity":
+        case "publish":
+          if (writesEnabled) {
+            if (change.kind === "publish") {
+              await reverb.publishListing(listing);
+            } else {
+              await reverb.updateListingInventory(listing, {
+                inventory: targetQty,
+                has_inventory: true,
+                publish: true,
+              });
+            }
+          }
+          itemResult.action = writesEnabled ? "updated" : "would-update";
+          result.updated++;
           console.log(
-            `[ReverbSync] UNPUBLISHED ${item.canonicalSku} (reverb ${listing.id})`
+            change.kind === "publish"
+              ? `[ReverbSync] ${writesEnabled ? "" : "[dry-run] would "}PUBLISH one-off ${item.canonicalSku} (reverb ${listing.id})`
+              : `[ReverbSync] ${writesEnabled ? "" : "[dry-run] would "}UPDATE ${item.canonicalSku} (reverb ${listing.id}) qty ${currentQty} -> ${targetQty}`
           );
-        }
-      } else if (currentQty === targetQty && isLive) {
-        itemResult.action = "noop";
-        result.noop++;
-      } else if (!writesEnabled) {
-        itemResult.action = "would-update";
-        result.updated++;
-        console.log(
-          `[ReverbSync] [dry-run] would UPDATE ${item.canonicalSku} (reverb ${listing.id}) qty ${currentQty} -> ${targetQty}`
-        );
-      } else {
-        await reverb.updateListingInventory(listing, {
-          inventory: targetQty,
-          has_inventory: true,
-          publish: true,
-        });
-        itemResult.action = "updated";
-        result.updated++;
-        console.log(
-          `[ReverbSync] UPDATED ${item.canonicalSku} (reverb ${listing.id}) qty ${currentQty} -> ${targetQty}`
-        );
+          break;
       }
+
+      // What the listing shows once this run is done. A one-off holds one
+      // guitar while it is up, whatever Katana counts.
+      const reverbQtyAfter = reverbQtyAfterChange(change, currentQty, targetQty);
+      const wrote = writesEnabled && change.kind !== "noop" && change.kind !== "leave";
 
       await recordSyncLog({
         syncType:
-          itemResult.action.includes("unpublish")
-            ? SyncType.LISTING_UPDATE
-            : SyncType.INVENTORY_QUANTITY,
+          change.kind === "set-quantity" || change.kind === "noop"
+            ? SyncType.INVENTORY_QUANTITY
+            : SyncType.LISTING_UPDATE,
         platform: IntegrationPlatform.REVERB,
-        status:
-          itemResult.action === "noop"
-            ? SyncStatus.SKIPPED
-            : writesEnabled
-              ? SyncStatus.SUCCESS
-              : SyncStatus.SKIPPED,
+        status: wrote ? SyncStatus.SUCCESS : SyncStatus.SKIPPED,
         direction: SyncDirection.OUTBOUND,
         inventoryItemId: item.inventoryItemId,
         previousValue: { inventory: currentQty, state: listing.state?.slug },
         newValue: {
-          inventory: targetQty,
+          inventory: reverbQtyAfter,
           action: itemResult.action,
+          ...(oneOff ? { oneOff: true, availableInKatana: targetQty } : {}),
           ...(heldBack > 0 ? { katanaQty, heldBackForReverbSales: heldBack } : {}),
         },
+        errorMessage: change.kind === "leave" ? change.note : undefined,
         dryRun: !writesEnabled,
-        details: writesEnabled
-          ? `Reverb listing ${listing.id} ${itemResult.action}`
-          : `[dry-run] Reverb listing ${listing.id} ${itemResult.action}`,
+        details: `${writesEnabled ? "" : "[dry-run] "}Reverb listing ${listing.id} ${describeChange(change, itemResult.action, writesEnabled)}`,
       });
 
       // Keep local cache fresh for the dashboard. Same numbers as the manual
@@ -311,7 +332,7 @@ export async function runKatanaToReverbSync(options: {
         where: { id: item.inventoryItemId },
         data: {
           katanaQty,
-          reverbQty: writesEnabled ? targetQty : currentQty,
+          reverbQty: writesEnabled ? reverbQtyAfter : currentQty,
           isReadyToShip: targetQty > 0,
           lastReverbSyncAt: writesEnabled ? new Date() : undefined,
           lastKatanaSyncAt: new Date(),
@@ -380,6 +401,8 @@ export interface ReverbSyncPlanItem {
   currentState: string | null;
   targetQty: number;
   action: "update" | "unpublish" | "noop" | "skip";
+  /** A one-off listing: "unpublish" ends it, "update" publishes it. */
+  oneOff: boolean;
   reason: string;
 }
 
@@ -495,6 +518,7 @@ export async function previewKatanaToReverbSync(options: {
       currentState: null,
       targetQty,
       action: "skip",
+      oneOff: false,
       reason: "",
     };
 
@@ -511,10 +535,10 @@ export async function previewKatanaToReverbSync(options: {
       planItem.reverbTitle = listing.title ?? null;
       planItem.currentReverbQty = listing.inventory ?? null;
       planItem.currentState = listing.state?.slug ?? null;
+      planItem.oneOff = isOneOffListing({ hasInventory: listing.has_inventory });
 
       const currentQty = listing.inventory ?? 0;
       const isLive = listing.state?.slug === "live";
-      const shouldUnpublish = targetQty <= 0;
       const drift = mappingDriftReason({
         canonicalSku: item.canonicalSku,
         katanaSku: item.katanaVariantId ? katanaSkuByVariant.get(item.katanaVariantId) : null,
@@ -525,26 +549,51 @@ export async function previewKatanaToReverbSync(options: {
         planItem.action = "skip";
         planItem.reason = `${drift} - left alone until it is re-linked`;
         plan.skipped++;
-      } else if (shouldUnpublish) {
-        if (!isLive && currentQty === 0) {
-          planItem.action = "noop";
-          planItem.reason = "Already at 0 and not live";
-          plan.noop++;
-        } else {
-          planItem.action = "unpublish";
-          planItem.reason = isLive
-            ? `Nothing available - would unpublish (qty ${currentQty} -> 0)${stockNote}`
-            : `Nothing available - would set qty ${currentQty} -> 0 (listing is not live)${stockNote}`;
-          plan.willUnpublish++;
-        }
-      } else if (currentQty === targetQty && isLive) {
-        planItem.action = "noop";
-        planItem.reason = `Quantities already match${stockNote}`;
-        plan.noop++;
       } else {
-        planItem.action = "update";
-        planItem.reason = `Would set Reverb qty ${currentQty} -> ${targetQty}${isLive ? "" : " and publish"}${stockNote}`;
-        plan.willUpdate++;
+        const change = planListingChange(
+          {
+            state: listing.state?.slug ?? null,
+            inventory: listing.inventory,
+            hasInventory: listing.has_inventory,
+            carriesKatanaSku: carriesSku(listing.sku, item.canonicalSku),
+          },
+          targetQty
+        );
+        switch (change.kind) {
+          case "noop":
+            planItem.action = "noop";
+            planItem.reason =
+              planItem.oneOff || targetQty > 0 ? `${change.note}${stockNote}` : change.note;
+            plan.noop++;
+            break;
+          case "leave":
+            planItem.action = "skip";
+            planItem.reason = `${change.note}${stockNote}`;
+            plan.skipped++;
+            break;
+          case "unpublish":
+            planItem.action = "unpublish";
+            planItem.reason = isLive
+              ? `Nothing available - would unpublish (qty ${currentQty} -> 0)${stockNote}`
+              : `Nothing available - would set qty ${currentQty} -> 0 (listing is not live)${stockNote}`;
+            plan.willUnpublish++;
+            break;
+          case "end":
+            planItem.action = "unpublish";
+            planItem.reason = `Nothing available - would end this one-off listing${stockNote}`;
+            plan.willUnpublish++;
+            break;
+          case "set-quantity":
+            planItem.action = "update";
+            planItem.reason = `Would set Reverb qty ${currentQty} -> ${targetQty}${isLive ? "" : " and publish"}${stockNote}`;
+            plan.willUpdate++;
+            break;
+          case "publish":
+            planItem.action = "update";
+            planItem.reason = `One-off draft - would publish it${stockNote}`;
+            plan.willUpdate++;
+            break;
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
@@ -671,6 +720,43 @@ async function loadReverbListing(
     return reverb.findListingBySku(reverbSku, "all");
   }
   return null;
+}
+
+/** The quantity a listing shows once a change is made. */
+function reverbQtyAfterChange(
+  change: ListingChange,
+  currentQty: number,
+  targetQty: number
+): number {
+  switch (change.kind) {
+    case "set-quantity":
+      return targetQty;
+    case "unpublish":
+    case "end":
+      return 0;
+    case "publish":
+      return 1;
+    default:
+      return currentQty;
+  }
+}
+
+/** The sync log's wording for a change: one-offs are ended and published. */
+function describeChange(
+  change: ListingChange,
+  action: ReverbSyncItemResult["action"],
+  writesEnabled: boolean
+): string {
+  switch (change.kind) {
+    case "end":
+      return writesEnabled ? "ended (one-off)" : "would end (one-off)";
+    case "publish":
+      return writesEnabled ? "published (one-off)" : "would publish (one-off)";
+    case "leave":
+      return `left alone: ${change.note}`;
+    default:
+      return action;
+  }
 }
 
 /** "2 in stock, 1 committed" across all locations, or why there is nothing. */

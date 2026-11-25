@@ -31,12 +31,30 @@ export function normalizeSku(sku: string): string {
 }
 
 /**
+ * Whether a Reverb listing can be linked to a Katana item by its SKU. Listings
+ * set to "I have more than one" always can. One-off listings (has_inventory =
+ * false) can while they are live or a draft: a one-off that has sold or ended
+ * was a single guitar that is gone, so there is nothing left to sync.
+ */
+export function isLinkableListing(listing: {
+  hasInventory: boolean | null;
+  state: string | null;
+}): boolean {
+  return (
+    listing.hasInventory !== false ||
+    listing.state === "live" ||
+    listing.state === "draft"
+  );
+}
+
+/**
  * Core exact-SKU auto-match. Creates mappings where a Katana variant SKU
  * exactly equals a Reverb listing SKU. This is the auth-free implementation
  * shared by the `autoMatchByExactSku` server action and internal tooling.
  *
- * Reverb "unique" (one-of-a-kind) listings (has_inventory = false) are never
- * eligible candidates - they are excluded from the matching pool entirely.
+ * One-off listings (has_inventory = false) are candidates only while live or a
+ * draft (see isLinkableListing). Matching is by SKU, so a one-off is only ever
+ * linked when it carries the Katana SKU itself.
  * Throws on precondition failure (e.g. catalogs not imported yet).
  */
 export async function autoMatchByExactSkuCore(): Promise<ExactMatchResult> {
@@ -91,11 +109,10 @@ export async function autoMatchByExactSkuCore(): Promise<ExactMatchResult> {
     if (!sku) continue;
     if (mappedKatanaSkus.has(sku)) continue; // already mapped on Katana side
 
-    // Skip Reverb "unique" (one-of-a-kind) listings: has_inventory = false.
-    // These are excluded from the mapping pool. Look up by normalized SKU so
-    // listings with a stray dash still match this variant.
+    // Look up by normalized SKU so listings with a stray dash still match this
+    // variant. Sold or ended one-offs are left out (see isLinkableListing).
     const candidates = (reverbBySku.get(normalizeSku(sku)) ?? []).filter(
-      (l) => !mappedReverbListingIds.has(l.listingId) && l.hasInventory !== false
+      (l) => !mappedReverbListingIds.has(l.listingId) && isLinkableListing(l)
     );
     if (candidates.length === 0) continue;
 

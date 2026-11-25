@@ -155,7 +155,7 @@ export function IntegrationsClient({ integrations, syncConfigs, error }: Integra
             <EmptyState
               icon={RefreshCw}
               title="No sync jobs configured"
-              description="The Katana to Reverb inventory sync and Reverb order polling run on a 15-minute cron. Per-job configuration records will appear here when created."
+              description="The Katana to Reverb inventory sync and Reverb order polling each run every 5 minutes. Per-job configuration records will appear here when created."
             />
           ) : (
             <div className="space-y-3">

@@ -144,7 +144,9 @@ class ReverbClient {
     }
 
     if (response.status === 204) return undefined as T;
-    return (await response.json()) as T;
+    // Some writes (ending a listing) answer 200 with an empty body.
+    const text = await response.text();
+    return (text ? JSON.parse(text) : undefined) as T;
   }
 
   async ping(): Promise<{ ok: boolean; shopName?: string; error?: string }> {
@@ -226,6 +228,27 @@ class ReverbClient {
       inventory: 0,
       has_inventory: true,
       publish: false,
+    });
+  }
+
+  /**
+   * Publishes a one-off draft. One-offs have no quantity, so nothing else is
+   * sent: sending has_inventory would turn it into a quantity listing.
+   */
+  async publishListing(listing: ReverbListing): Promise<ReverbListing> {
+    return this.updateListingInventory(listing, { publish: true });
+  }
+
+  /**
+   * Ends a live one-off listing, as "End listing" on Reverb does, with the
+   * reason that it was not sold on Reverb. Uses the listing's own end link.
+   */
+  async endListing(listing: ReverbListing): Promise<void> {
+    const href =
+      listing._links?.end?.href ?? `/my/listings/${listing.id}/state/end`;
+    await this.request<unknown>(href, {
+      method: "PUT",
+      body: JSON.stringify({ reason: "not_sold" }),
     });
   }
 

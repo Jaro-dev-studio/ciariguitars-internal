@@ -257,7 +257,10 @@ export function SyncLogsClient({
         This is the audit trail for everything the system does. The{" "}
         <strong>Runs</strong> tab lists each time a cron, webhook or manual action fired,
         with how long it took and what it produced. The <strong>Events</strong> tab is the
-        line-by-line detail underneath those runs. Open a run to see only its events.
+        line-by-line detail underneath those runs. Open a run to see only its events. Events
+        where the inventory sync had nothing to write to Reverb are deleted after 7 days; every
+        change it made, every failure and every Reverb sale is kept, and each run keeps its
+        counts.
       </PageIntro>
 
       {error && (

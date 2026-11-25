@@ -3,6 +3,8 @@ import "server-only";
 import { IntegrationPlatform } from "@prisma/client";
 import prisma from "@/lib/prisma";
 
+import { carriesSku } from "./mapping-guard";
+
 /**
  * Ciari's Katana and Reverb SKUs do NOT match today (Reverb uses generated
  * SKUs, Katana uses manually-set ones). All cross-platform matching therefore
@@ -110,32 +112,32 @@ function buildResolved(item: ItemWithMappings): ResolvedMapping {
  * All inventory items that have BOTH a Katana and Reverb mapping - i.e. the
  * set we can actively keep in sync. Items missing either side are surfaced as
  * coverage gaps elsewhere.
+ *
+ * One-off Reverb listings (has_inventory = false) are included only when the
+ * listing carries the item's Katana SKU itself. A one-off linked any other way
+ * (by title, or by hand before one-offs were synced) stays out, so a
+ * one-of-a-kind guitar is never ended because of an old link.
  */
 export async function listSyncableItems(): Promise<ResolvedMapping[]> {
-  const [items, uniqueListings] = await Promise.all([
+  const [items, oneOffListings] = await Promise.all([
     prisma.inventoryItem.findMany({
       include: { skuMappings: true },
     }),
-    // Reverb "unique" (one-of-a-kind) listings have has_inventory = false and
-    // must never be touched by live sync. Null = unknown, so it stays syncable.
     prisma.reverbCatalogListing.findMany({
       where: { hasInventory: false },
-      select: { listingId: true },
+      select: { listingId: true, sku: true },
     }),
   ]);
 
-  const excludedReverbListingIds = new Set(
-    uniqueListings.map((l) => l.listingId)
+  const oneOffSkuByListingId = new Map(
+    oneOffListings.map((l) => [l.listingId, l.sku])
   );
 
-  return items
-    .map(buildResolved)
-    .filter(
-      (r) =>
-        r.katanaVariantId !== null &&
-        r.reverbListingId !== null &&
-        !excludedReverbListingIds.has(r.reverbListingId)
-    );
+  return items.map(buildResolved).filter((r) => {
+    if (r.katanaVariantId === null || r.reverbListingId === null) return false;
+    if (!oneOffSkuByListingId.has(r.reverbListingId)) return true;
+    return carriesSku(oneOffSkuByListingId.get(r.reverbListingId), r.canonicalSku);
+  });
 }
 
 /**

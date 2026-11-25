@@ -17,8 +17,10 @@ export const RANGE_LABELS: Record<SyncLogRange, string> = {
 };
 
 /**
- * The log table holds over a million rows, so an unbounded default would make
- * every visit scan the whole table. Seven days covers normal debugging.
+ * The log table is large (the inventory sync writes a row per listing every
+ * run), so an unbounded default would make every visit scan the whole table.
+ * Seven days covers normal debugging, and it is also how long the daily
+ * cleanup keeps the sync's "nothing written" rows.
  */
 export const DEFAULT_RANGE: SyncLogRange = "7d";
 

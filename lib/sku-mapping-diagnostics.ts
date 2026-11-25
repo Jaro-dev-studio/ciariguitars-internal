@@ -2,7 +2,7 @@ import "server-only";
 
 import { IntegrationPlatform } from "@prisma/client";
 import prisma from "@/lib/prisma";
-import { normalizeSku } from "@/lib/sku-mapping-core";
+import { isLinkableListing, normalizeSku } from "@/lib/sku-mapping-core";
 
 export interface DiagnosticDuplicate {
   sku: string;
@@ -43,7 +43,8 @@ export interface MappingDiagnostics {
   };
   reverb: {
     totalListings: number;
-    uniqueExcluded: number;
+    /** One-off listings that have sold or ended, so are never linked. */
+    oneOffGone: number;
     hasInventoryNull: number;
     syncable: number;
     syncableWithSku: number;
@@ -60,7 +61,6 @@ export interface MappingDiagnostics {
     readyToMap: number;
     noReverbListing: number;
     onlySoldEnded: number;
-    uniqueExcludedMatch: number;
     blockedByMapping: number;
     ambiguous: number;
   };
@@ -106,9 +106,10 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
   const katanaBySku = group(katanaWithSku, (v) => v.sku);
   const dupKatanaSkus = [...katanaBySku.entries()].filter(([, v]) => v.length > 1);
 
-  const reverbUnique = reverb.filter((l) => l.hasInventory === false);
+  // Same rule as the matcher: one-offs count while they are live or a draft.
+  const reverbOneOffGone = reverb.filter((l) => !isLinkableListing(l));
   const reverbNull = reverb.filter((l) => l.hasInventory === null);
-  const syncable = reverb.filter((l) => l.hasInventory !== false);
+  const syncable = reverb.filter(isLinkableListing);
   const syncableWithSku = syncable.filter((l) => l.sku);
   // Group by normalized SKU so a stray dash matches the same as the matcher.
   const reverbBySku = group(syncable, (l) => (l.sku ? normalizeSku(l.sku) : null));
@@ -144,7 +145,6 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
     readyToMap: 0,
     noReverbListing: 0,
     onlySoldEnded: 0,
-    uniqueExcludedMatch: 0,
     blockedByMapping: 0,
     ambiguous: 0,
   };
@@ -158,16 +158,15 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
       continue;
     }
     const all = reverbByNormSkuAll.get(normalizeSku(sku)) ?? [];
-    // Mirror the matcher: only in-stock listings not already mapped elsewhere.
+    // Mirror the matcher: only linkable listings not already mapped elsewhere.
     const candidates = all.filter(
-      (l) => l.hasInventory !== false && !mappedReverbListingIds.has(l.listingId)
+      (l) => isLinkableListing(l) && !mappedReverbListingIds.has(l.listingId)
     );
 
-    // Detect concrete mis-mappings: an in-stock, live/draft listing whose SKU
-    // matches this unmapped Katana SKU but is already claimed by another item.
+    // Detect concrete mis-mappings: a live/draft listing whose SKU matches
+    // this unmapped Katana SKU but is already claimed by another item.
     const blockedListings = all.filter(
       (l) =>
-        l.hasInventory !== false &&
         (l.state === "live" || l.state === "draft") &&
         mappedReverbListingIds.has(l.listingId)
     );
@@ -202,13 +201,11 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
       if (all.length === 0) {
         classification.noReverbListing++;
         noReverbSkus.push(sku);
-      } else if (all.every((l) => l.hasInventory === false)) {
-        classification.uniqueExcludedMatch++;
       } else if (blockedListings.length > 0) {
         // A matching live/draft listing exists but is mapped to another item.
         classification.blockedByMapping++;
       } else {
-        // Listing(s) exist but are sold/ended.
+        // Listing(s) exist but are sold/ended (one-offs included).
         classification.onlySoldEnded++;
         soldEndedSkus.push(sku);
       }
@@ -256,7 +253,7 @@ export async function computeMappingDiagnostics(): Promise<MappingDiagnostics> {
     },
     reverb: {
       totalListings: reverb.length,
-      uniqueExcluded: reverbUnique.length,
+      oneOffGone: reverbOneOffGone.length,
       hasInventoryNull: reverbNull.length,
       syncable: syncable.length,
       syncableWithSku: syncableWithSku.length,

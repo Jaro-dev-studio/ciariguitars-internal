@@ -14,6 +14,20 @@ function sameSku(a: string, b: string): boolean {
 }
 
 /**
+ * Whether a listing carries this SKU itself, rather than a blank SKU or
+ * Reverb's own rev-<id> placeholder. One-off listings are only synced when
+ * they do, so a one-of-a-kind guitar linked some other way is never ended.
+ */
+export function carriesSku(
+  listingSku: string | null | undefined,
+  canonicalSku: string
+): boolean {
+  if (!listingSku) return false;
+  const sku = normalizeSku(listingSku);
+  return Boolean(sku) && !PLACEHOLDER_SKU.test(sku) && sameSku(sku, canonicalSku);
+}
+
+/**
  * Why a mapping can no longer be trusted, or null when it still lines up.
  *
  * A mapping ties a Katana item to a Reverb listing by id, so it keeps pointing

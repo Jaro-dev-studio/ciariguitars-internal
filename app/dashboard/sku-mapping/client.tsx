@@ -542,8 +542,9 @@ export function SKUMappingClient({
         This is the foundation for every sync, linking each Katana variant to its Reverb listing.
         <strong>Sync mappings</strong> re-imports both catalogs and auto-links every item whose
         Katana and Reverb SKUs now match, in one step. It also runs on its own before every
-        15-minute inventory sync, so a SKU added or fixed on either side is linked within 15
-        minutes; click it to link straight away. The separate <strong>Import catalogs</strong>, <strong>Auto-match by SKU</strong>,
+        5-minute inventory sync, so a SKU added or fixed on either side is linked within 5
+        minutes; click it to link straight away. One-off listings are linked only by their SKU,
+        while they are live or a draft. The separate <strong>Import catalogs</strong>, <strong>Auto-match by SKU</strong>,
         and <strong>Auto-suggest</strong> (fuzzy title matches) buttons run those steps individually
         if needed. Mappings flagged <strong>Review</strong> point at a Reverb listing that has sold,
         ended, or had its SKU reassigned. Only mapped items are kept in sync.

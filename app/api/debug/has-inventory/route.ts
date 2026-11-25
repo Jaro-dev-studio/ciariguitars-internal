@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { reverb } from "@/lib/integrations/reverb";
 import { katana } from "@/lib/integrations/katana";
+import { carriesSku } from "@/lib/integrations/mapping-guard";
 import { listSyncableItems } from "@/lib/integrations/sku-resolver";
 import { fetchMappingData } from "@/lib/sku-mapping-actions";
 import { autoMatchByExactSkuCore } from "@/lib/sku-mapping-core";
@@ -18,10 +19,10 @@ function isAuthorized(request: NextRequest): boolean {
 }
 
 /**
- * Read-only verification endpoint for the has_inventory / unique-listing
- * exclusion. Confirms Reverb returns has_inventory, that one-of-a-kind
- * listings (has_inventory = false) are persisted to staging, and that they are
- * excluded from both the mapping pool and listSyncableItems().
+ * Read-only verification endpoint for one-off (has_inventory = false)
+ * listings. Confirms Reverb returns has_inventory, that one-off listings are
+ * persisted to staging, that they stay out of the hand-mapping pool, and that
+ * listSyncableItems() only includes one-offs carrying their Katana SKU.
  *
  * Pass ?import=true to re-run the Reverb catalog upsert first so the staging
  * hasInventory column reflects live data before the checks run.
@@ -167,19 +168,25 @@ export async function GET(request: NextRequest) {
     ]);
 
     console.log(
-      "[HasInventoryCheck] Verifying listSyncableItems() excludes unique listings..."
+      "[HasInventoryCheck] Verifying listSyncableItems() only syncs one-offs that carry their Katana SKU..."
     );
-    const uniqueListingIds = new Set(
+    const oneOffSkuById = new Map(
       (
         await prisma.reverbCatalogListing.findMany({
           where: { hasInventory: false },
-          select: { listingId: true },
+          select: { listingId: true, sku: true },
         })
-      ).map((l) => l.listingId)
+      ).map((l) => [l.listingId, l.sku])
     );
+    const uniqueListingIds = new Set(oneOffSkuById.keys());
     const syncable = await listSyncableItems();
-    const leakedIntoSync = syncable.filter(
-      (s) => s.reverbListingId && uniqueListingIds.has(s.reverbListingId)
+    const oneOffsSynced = syncable.filter(
+      (s) => s.reverbListingId && oneOffSkuById.has(s.reverbListingId)
+    );
+    // A one-off in the sync without its Katana SKU on the listing should never
+    // happen: those could end a one-of-a-kind guitar over an old link.
+    const leakedIntoSync = oneOffsSynced.filter(
+      (s) => !carriesSku(oneOffSkuById.get(s.reverbListingId as string), s.canonicalSku)
     );
 
     console.log(
@@ -245,7 +252,8 @@ export async function GET(request: NextRequest) {
       },
       syncable: {
         count: syncable.length,
-        uniqueListingsLeaked: leakedIntoSync.length,
+        oneOffsSynced: oneOffsSynced.length,
+        oneOffsWithoutKatanaSku: leakedIntoSync.length,
         leakedListingIds: leakedIntoSync.map((s) => s.reverbListingId),
       },
       mappingPool: {

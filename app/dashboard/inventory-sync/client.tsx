@@ -198,14 +198,17 @@ function PreviewPanel({ plan, onClose }: { plan: ReverbSyncPlan; onClose: () => 
                 {rows.map((item) => {
                   const meta = PLAN_ACTION_META[item.action];
                   // A draft or ended listing is published by an update, and only
-                  // has its quantity zeroed by an "unpublish".
+                  // has its quantity zeroed by an "unpublish". A one-off has no
+                  // quantity: it is published, or ended.
                   const isLive = item.currentState === "live";
                   const label =
-                    item.action === "update" && !isLive
-                      ? "Would publish"
-                      : item.action === "unpublish" && !isLive
-                        ? "Would set to 0"
-                        : meta.label;
+                    item.oneOff && item.action === "unpublish"
+                      ? "Would end"
+                      : item.action === "update" && (!isLive || item.oneOff)
+                        ? "Would publish"
+                        : item.action === "unpublish" && !isLive
+                          ? "Would set to 0"
+                          : meta.label;
                   return (
                     <TableRow key={`${item.canonicalSku}-${item.reverbListingId}`}>
                       <TableCell className="max-w-[280px]">
@@ -218,6 +221,7 @@ function PreviewPanel({ plan, onClose }: { plan: ReverbSyncPlan; onClose: () => 
                         {item.currentState && (
                           <p className="text-xs text-muted-foreground">
                             state: {item.currentState}
+                            {item.oneOff && " · one-off"}
                           </p>
                         )}
                       </TableCell>
@@ -234,12 +238,16 @@ function PreviewPanel({ plan, onClose }: { plan: ReverbSyncPlan; onClose: () => 
                       </TableCell>
                       <TableCell className="text-center font-mono font-medium">
                         {item.action === "unpublish"
-                          ? isLive
-                            ? "0 (unpublish)"
-                            : "0"
+                          ? item.oneOff
+                            ? "0 (end)"
+                            : isLive
+                              ? "0 (unpublish)"
+                              : "0"
                           : item.action === "skip"
                             ? "-"
-                            : item.targetQty}
+                            : item.oneOff
+                              ? 1
+                              : item.targetQty}
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className={cn("text-xs", meta.className)}>
@@ -417,7 +425,7 @@ export function InventorySyncClient({ inventoryItems, error, link }: InventorySy
         }}
         confirmOn={{
           title: "Switch the Reverb link on?",
-          body: "Every 15 minutes Reverb quantities will be set from Katana (listings at 0 are unpublished), and Reverb sales placed from now on will be taken out of Katana automatically, so stop entering them by hand. Run Preview changes first to check what the first sync will do.",
+          body: "Every 5 minutes Reverb quantities will be set from Katana (listings at 0 are unpublished, and one-off listings ended), and Reverb sales placed from now on will be taken out of Katana automatically, so stop entering them by hand. Run Preview changes first to check what the first sync will do.",
         }}
         confirmOff={{
           title: "Switch the Reverb link off?",
